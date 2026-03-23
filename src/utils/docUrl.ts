@@ -11,13 +11,17 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
   if (GOOGLE_DOC_ID_PATTERN.test(trimmed)) {
     return {
       fileId: trimmed,
-      sourceUrl: buildGoogleDocUrl(trimmed)
+      sourceUrl: buildGoogleDriveFileUrl(trimmed)
     };
   }
 
   try {
     const url = new URL(trimmed);
-    const match = url.pathname.match(/\/document\/d\/([a-zA-Z0-9_-]+)/);
+    const idParam = url.searchParams.get("id");
+    const match =
+      url.pathname.match(/\/document\/d\/([a-zA-Z0-9_-]+)/) ||
+      url.pathname.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) ||
+      (idParam ? [idParam, idParam] : null);
     if (!match) {
       return undefined;
     }
@@ -26,7 +30,7 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
     const fileId = match[1];
     return {
       fileId,
-      sourceUrl: buildGoogleDocUrl(fileId),
+      sourceUrl: url.pathname.includes("/document/") ? buildGoogleDocUrl(fileId) : buildGoogleDriveFileUrl(fileId),
       resourceKey
     };
   } catch {
@@ -36,4 +40,8 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
 
 export function buildGoogleDocUrl(fileId: string): string {
   return `https://docs.google.com/document/d/${fileId}/edit`;
+}
+
+export function buildGoogleDriveFileUrl(fileId: string): string {
+  return `https://drive.google.com/file/d/${fileId}/view`;
 }

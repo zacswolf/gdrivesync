@@ -27,7 +27,7 @@ describe("DriveClient", () => {
     await expect(
       client.getFileMetadata("token", {
         fileId: "doc-1",
-        expectedMimeType: "application/vnd.google-apps.document",
+        expectedMimeTypes: ["application/vnd.google-apps.document"],
         sourceTypeLabel: "Google Doc"
       })
     ).resolves.toMatchObject({
@@ -45,5 +45,10 @@ describe("DriveClient", () => {
   it("exports text using the requested mime type", async () => {
     const client = new DriveClient(async () => mockResponse("# Hello"));
     await expect(client.exportText("token", "doc-1", "text/markdown")).resolves.toBe("# Hello");
+  });
+
+  it("downloads blob files as bytes", async () => {
+    const client = new DriveClient(async () => mockResponse("Hello"));
+    await expect(client.downloadFile("token", "doc-1")).resolves.toEqual(Uint8Array.from(Buffer.from("Hello")));
   });
 });

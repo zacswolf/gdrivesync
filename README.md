@@ -1,6 +1,6 @@
 # GDriveSync for VS Code
 
-One-way Google Docs to Markdown sync for VS Code. Link a Google Doc to a normal `.md` file, then sync on demand or when the file opens.
+One-way Google Drive file to Markdown sync for VS Code. Link a Google Doc or DOCX file in Drive to a normal `.md` file, then sync on demand or when the file opens.
 
 ## What is implemented
 
@@ -8,12 +8,13 @@ One-way Google Docs to Markdown sync for VS Code. Link a Google Doc to a normal 
 - Google OAuth desktop flow with PKCE and VS Code `SecretStorage`
 - Desktop OAuth uses a localhost loopback callback inside the extension
 - Google Drive export to `text/markdown`
+- DOCX-in-Drive download and local DOCX -> Markdown conversion
 - Workspace sidecar manifest in `.gdocsync.json`
 - Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
 - Thin CLI harness for local auth/export testing
-- Internal sync profiles so Docs -> Markdown is the first export mode rather than a one-off special case
+- Internal sync profiles so Google Docs and DOCX can share one user-facing Markdown sync flow
 
 ## Project layout
 
@@ -104,13 +105,13 @@ The CLI is for development and debugging, not for end users.
 
 ```bash
 npm run cli -- sign-in
-npm run cli -- metadata https://docs.google.com/document/d/<doc-id>/edit
-npm run cli -- export https://docs.google.com/document/d/<doc-id>/edit ./doc.md
+npm run cli -- metadata https://docs.google.com/document/d/<file-id>/edit
+npm run cli -- export https://drive.google.com/file/d/<file-id>/view ./file.md
 ```
 
 ## Current limitations
 
-- One-way sync only: Google Docs -> Markdown
-- `drive.file` access means pasted doc IDs may still need one Picker-open round trip
-- Formatting fidelity depends on Google’s Markdown export
+- One-way sync only: Google files -> Markdown
+- `drive.file` access means pasted file IDs may still need one Picker-open round trip
+- Formatting fidelity depends on Google’s Markdown export for native Docs and local DOCX conversion for Word files
 - Linked files must live inside an open VS Code workspace folder

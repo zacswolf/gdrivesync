@@ -12,6 +12,15 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+function toStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const items = value.filter(isString);
+  return items.length > 0 ? items : undefined;
+}
+
 export function normalizeManifest(rawValue: unknown): SyncManifest {
   if (!rawValue || typeof rawValue !== "object") {
     return defaultManifest();
@@ -51,6 +60,7 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
       title: entry.title,
       syncOnOpen: entry.syncOnOpen,
       resourceKey: isString(entry.resourceKey) ? entry.resourceKey : undefined,
+      generatedAssetPaths: toStringArray(entry.generatedAssetPaths),
       lastSyncedAt: isString(entry.lastSyncedAt) ? entry.lastSyncedAt : undefined,
       lastDriveVersion: isString(entry.lastDriveVersion) ? entry.lastDriveVersion : undefined,
       lastLocalHash: isString(entry.lastLocalHash) ? entry.lastLocalHash : undefined

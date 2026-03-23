@@ -17,7 +17,7 @@ export class PickerGrantRequiredError extends GoogleApiError {}
 interface FileMetadataRequest {
   fileId: string;
   resourceKey?: string;
-  expectedMimeType?: string;
+  expectedMimeTypes?: string[];
   sourceTypeLabel?: string;
 }
 
@@ -43,7 +43,7 @@ export class DriveClient {
     }
 
     const payload = (await response.json()) as DriveFileMetadata;
-    if (request.expectedMimeType && payload.mimeType !== request.expectedMimeType) {
+    if (request.expectedMimeTypes && !request.expectedMimeTypes.includes(payload.mimeType)) {
       throw new GoogleApiError(`The selected file is not a ${request.sourceTypeLabel || "supported Google file"}.`, 400, payload.mimeType);
     }
 
@@ -68,6 +68,27 @@ export class DriveClient {
     }
 
     return response.text();
+  }
+
+  async downloadFile(accessToken: string, fileId: string, resourceKey?: string): Promise<Uint8Array> {
+    const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}`);
+    url.searchParams.set("alt", "media");
+    url.searchParams.set("supportsAllDrives", "true");
+    if (resourceKey) {
+      url.searchParams.set("resourceKey", resourceKey);
+    }
+
+    const response = await this.fetchImpl(url, {
+      headers: {
+        authorization: `Bearer ${accessToken}`
+      }
+    });
+
+    if (!response.ok) {
+      await this.throwDriveError(response, fileId);
+    }
+
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   private async throwDriveError(response: Response, fileId: string): Promise<never> {

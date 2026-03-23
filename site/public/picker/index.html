@@ -178,10 +178,12 @@
 
       function requestGoogleToken(googleWebClientId) {
         return new Promise((resolve, reject) => {
+          const request = parseRequest();
           const tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: googleWebClientId,
             scope: DRIVE_FILE_SCOPE,
             prompt: "",
+            login_hint: request.payload.loginHint || undefined,
             callback: (response) => {
               if (response.error) {
                 reject(new Error(response.error));
@@ -243,7 +245,7 @@
         }
 
         const payload = await response.json();
-        if (payload.mimeType !== request.payload.sourceMimeType) {
+        if (!request.payload.supportedMimeTypes.includes(payload.mimeType)) {
           throw new Error(`The pasted file is not a ${request.payload.sourceTypeLabel}.`);
         }
 
@@ -285,7 +287,7 @@
                 fileId: doc.id,
                 title: doc.name || doc.title || request.payload.sourceTypeLabel,
                 sourceUrl: doc.url || "",
-                sourceMimeType: doc.mimeType || request.payload.sourceMimeType,
+                sourceMimeType: doc.mimeType || request.payload.supportedMimeTypes[0] || "",
                 resourceKey: doc.resourceKey
               });
             }

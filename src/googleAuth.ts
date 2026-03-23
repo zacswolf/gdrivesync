@@ -90,18 +90,23 @@ export class GoogleAuthManager {
         throw new Error("Google sign-in returned without an authorization code.");
       }
 
-      const existingSession = await this.tokenStore.get();
-      const nextSession = await this.exchangeAuthorizationCode(
-        code,
-        codeVerifier,
-        callbackServer.localRedirect,
-        config,
-        existingSession?.refreshToken
-      );
-      await this.tokenStore.set(nextSession);
+      await this.completeAuthorizationCodeGrant(code, callbackServer.localRedirect, codeVerifier);
     } finally {
       await callbackServer.dispose();
     }
+  }
+
+  async completeAuthorizationCodeGrant(code: string, redirectUri: string, codeVerifier?: string): Promise<void> {
+    const config = this.configProvider();
+    const existingSession = await this.tokenStore.get();
+    const nextSession = await this.exchangeAuthorizationCode(
+      code,
+      codeVerifier,
+      redirectUri,
+      config,
+      existingSession?.refreshToken
+    );
+    await this.tokenStore.set(nextSession);
   }
 
   async ensureSignedIn(): Promise<void> {
@@ -153,7 +158,7 @@ export class GoogleAuthManager {
 
   private async exchangeAuthorizationCode(
     code: string,
-    codeVerifier: string,
+    codeVerifier: string | undefined,
     redirectUri: string,
     config: GoogleReleaseConfig,
     fallbackRefreshToken?: string
@@ -161,10 +166,12 @@ export class GoogleAuthManager {
     const body = new URLSearchParams({
       client_id: config.desktopClientId,
       code,
-      code_verifier: codeVerifier,
       grant_type: "authorization_code",
       redirect_uri: redirectUri
     });
+    if (codeVerifier) {
+      body.set("code_verifier", codeVerifier);
+    }
     if (config.desktopClientSecret) {
       body.set("client_secret", config.desktopClientSecret);
     }

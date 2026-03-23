@@ -1,4 +1,4 @@
-export type SyncProfileId = "google-doc-markdown";
+export type SyncProfileId = "google-doc-markdown" | "word-docx-markdown";
 
 export interface LinkedFileEntry {
   profileId: SyncProfileId;
@@ -10,6 +10,7 @@ export interface LinkedFileEntry {
   resourceKey?: string;
   title: string;
   syncOnOpen: boolean;
+  generatedAssetPaths?: string[];
   lastSyncedAt?: string;
   lastDriveVersion?: string;
   lastLocalHash?: string;
@@ -27,6 +28,7 @@ export interface GoogleReleaseConfig {
   oauthBridgeUrl: string;
   pickerUrl: string;
   scope: string;
+  loginHint?: string;
 }
 
 export interface StoredOAuthSession {
@@ -39,18 +41,19 @@ export interface StoredOAuthSession {
 
 export interface OAuthStatePayload {
   nonce: string;
+  localRedirect?: string;
 }
 
 export interface PickerRequestPayload {
   nonce: string;
   localRedirect: string;
-  profileId: SyncProfileId;
-  sourceMimeType: string;
   sourceTypeLabel: string;
   pickerViewId: string;
   pickerMimeTypes: string;
+  supportedMimeTypes: string[];
   hintFileId?: string;
   resourceKey?: string;
+  loginHint?: string;
 }
 
 export interface PickerSelection {
@@ -95,4 +98,10 @@ export interface TokenStore {
 export interface SyncOutcome {
   status: "synced" | "skipped" | "cancelled";
   message: string;
+}
+
+export interface GeneratedMarkdownAsset {
+  relativePath: string;
+  bytes: Uint8Array;
+  mimeType: string;
 }

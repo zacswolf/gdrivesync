@@ -1,15 +1,17 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rmdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { convertDocxToMarkdown } from "./docxConverter";
 import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
 import { getSyncProfile } from "./syncProfiles";
-import { PickerSelection, SyncOutcome } from "./types";
+import { GeneratedMarkdownAsset, PickerSelection, SyncOutcome } from "./types";
 import { sha256Text } from "./utils/hash";
+import { containsEmbeddedImageData, extractMarkdownAssets } from "./utils/markdownAssets";
 
 export class SyncManager {
   private readonly inFlightSyncs = new Map<string, Promise<SyncOutcome>>();
@@ -34,6 +36,7 @@ export class SyncManager {
       resourceKey: selection.resourceKey,
       title: selection.title,
       syncOnOpen,
+      generatedAssetPaths: undefined,
       lastDriveVersion: undefined,
       lastLocalHash: undefined,
       lastSyncedAt: undefined
@@ -47,6 +50,19 @@ export class SyncManager {
       syncOnOpen: !entry.syncOnOpen
     }));
     return context.entry.syncOnOpen;
+  }
+
+  async unlinkFile(fileUri: vscode.Uri, options?: { removeGeneratedAssets?: boolean }): Promise<boolean> {
+    const context = await this.manifestStore.getLinkedFile(fileUri);
+    if (!context) {
+      return false;
+    }
+
+    if (options?.removeGeneratedAssets) {
+      await this.syncGeneratedAssets(fileUri, context.entry.generatedAssetPaths, []);
+    }
+
+    return this.manifestStore.unlinkFile(fileUri);
   }
 
   async syncFile(fileUri: vscode.Uri, options?: { reason?: "manual" | "open" | "link" }): Promise<SyncOutcome> {
@@ -120,17 +136,19 @@ export class SyncManager {
     const metadata = await this.driveClient.getFileMetadata(accessToken, {
       fileId: linkedFile.entry.fileId,
       resourceKey: linkedFile.entry.resourceKey,
-      expectedMimeType: linkedFile.entry.sourceMimeType,
+      expectedMimeTypes: [linkedFile.entry.sourceMimeType],
       sourceTypeLabel: profile.sourceTypeLabel
     });
-    if (linkedFile.entry.lastDriveVersion && metadata.version === linkedFile.entry.lastDriveVersion) {
+    const localText = await this.readLocalFileText(fileUri);
+    const needsAssetMigration = localText ? containsEmbeddedImageData(localText) : false;
+    if (linkedFile.entry.lastDriveVersion && metadata.version === linkedFile.entry.lastDriveVersion && !needsAssetMigration) {
       return {
         status: "skipped",
         message: "Remote version unchanged."
       };
     }
 
-    const localState = await this.readLocalFileState(fileUri);
+    const localState = await this.readLocalFileState(fileUri, localText);
     if (needsOverwriteConfirmation(localState, linkedFile.entry.lastLocalHash)) {
       const selection = await vscode.window.showWarningMessage(
         `${path.basename(fileUri.fsPath)} has local changes. Replace it with the latest Google content?`,
@@ -145,20 +163,21 @@ export class SyncManager {
       }
     }
 
-    const text = await this.driveClient.exportText(
-      accessToken,
-      linkedFile.entry.fileId,
-      linkedFile.entry.exportMimeType,
-      linkedFile.entry.resourceKey
-    );
-    await this.writeTextFile(fileUri, text);
-    const nextHash = sha256Text(text);
+    const sourceText =
+      linkedFile.entry.lastDriveVersion && metadata.version === linkedFile.entry.lastDriveVersion && localText
+        ? localText
+        : await this.fetchSourceMarkdown(accessToken, linkedFile.entry.fileId, linkedFile.entry.resourceKey, profile);
+    const preparedContent = extractMarkdownAssets(fileUri.fsPath, sourceText);
+    await this.syncGeneratedAssets(fileUri, linkedFile.entry.generatedAssetPaths, preparedContent.assets);
+    await this.writeTextFile(fileUri, preparedContent.markdown);
+    const nextHash = sha256Text(preparedContent.markdown);
     await this.manifestStore.updateLinkedFile(fileUri, (entry) => ({
       ...entry,
       title: metadata.name,
       sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
       sourceMimeType: metadata.mimeType,
       resourceKey: metadata.resourceKey || entry.resourceKey,
+      generatedAssetPaths: preparedContent.generatedAssetPaths,
       lastDriveVersion: metadata.version,
       lastLocalHash: nextHash,
       lastSyncedAt: new Date().toISOString()
@@ -174,13 +193,21 @@ export class SyncManager {
     };
   }
 
-  private async readLocalFileState(fileUri: vscode.Uri): Promise<LocalFileState> {
+  private async readLocalFileState(fileUri: vscode.Uri, existingText?: string): Promise<LocalFileState> {
     const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === fileUri.toString());
     if (openDocument) {
       return {
         fileExists: true,
         isDirty: openDocument.isDirty,
         currentHash: sha256Text(openDocument.getText())
+      };
+    }
+
+    if (existingText !== undefined) {
+      return {
+        fileExists: true,
+        isDirty: false,
+        currentHash: sha256Text(existingText)
       };
     }
 
@@ -200,6 +227,87 @@ export class SyncManager {
       }
 
       throw error;
+    }
+  }
+
+  private async readLocalFileText(fileUri: vscode.Uri): Promise<string | undefined> {
+    const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === fileUri.toString());
+    if (openDocument) {
+      return openDocument.getText();
+    }
+
+    try {
+      return await readFile(fileUri.fsPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return undefined;
+      }
+
+      throw error;
+    }
+  }
+
+  private async fetchSourceMarkdown(
+    accessToken: string,
+    fileId: string,
+    resourceKey: string | undefined,
+    profile: ReturnType<typeof getSyncProfile>
+  ): Promise<string> {
+    if (profile.retrievalMode === "drive-download-docx") {
+      const docxBytes = await this.driveClient.downloadFile(accessToken, fileId, resourceKey);
+      return convertDocxToMarkdown(docxBytes);
+    }
+
+    return this.driveClient.exportText(accessToken, fileId, profile.exportMimeType, resourceKey);
+  }
+
+  private async syncGeneratedAssets(
+    fileUri: vscode.Uri,
+    previousAssetPaths: string[] | undefined,
+    nextAssets: GeneratedMarkdownAsset[]
+  ): Promise<void> {
+    const fileDirectory = path.dirname(fileUri.fsPath);
+    const nextPaths = new Set(nextAssets.map((asset) => asset.relativePath));
+
+    for (const asset of nextAssets) {
+      const absolutePath = path.join(fileDirectory, ...asset.relativePath.split("/"));
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, asset.bytes);
+    }
+
+    for (const previousAssetPath of previousAssetPaths || []) {
+      if (nextPaths.has(previousAssetPath)) {
+        continue;
+      }
+
+      const absolutePath = path.join(fileDirectory, ...previousAssetPath.split("/"));
+      try {
+        await unlink(absolutePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw error;
+        }
+      }
+    }
+
+    const directories = new Set<string>();
+    for (const previousAssetPath of previousAssetPaths || []) {
+      directories.add(path.dirname(previousAssetPath));
+    }
+    for (const asset of nextAssets) {
+      directories.add(path.dirname(asset.relativePath));
+    }
+
+    for (const directory of [...directories].sort((left, right) => right.length - left.length)) {
+      const absoluteDirectory = path.join(fileDirectory, ...directory.split("/"));
+      try {
+        await rmdir(absoluteDirectory);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTEMPTY") {
+          throw error;
+        }
+      }
     }
   }
 

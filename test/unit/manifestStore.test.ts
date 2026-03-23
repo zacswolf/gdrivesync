@@ -42,12 +42,14 @@ describe("normalizeManifest", () => {
           exportMimeType: "text/markdown",
           localFormat: "markdown",
           title: "Spec",
-          syncOnOpen: false
+          syncOnOpen: false,
+          generatedAssetPaths: ["docs/spec.assets/image1.png"]
         }
       }
     });
 
     expect(manifest.files["docs/spec.md"]?.fileId).toBe("abc123");
     expect(manifest.files["docs/spec.md"]?.syncOnOpen).toBe(false);
+    expect(manifest.files["docs/spec.md"]?.generatedAssetPaths).toEqual(["docs/spec.assets/image1.png"]);
   });
 });

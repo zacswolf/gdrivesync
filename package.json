@@ -1,7 +1,7 @@
 {
   "name": "gdrivesync-vscode-extension",
   "displayName": "GDriveSync",
-  "description": "One-way Google Docs to Markdown sync for VS Code.",
+  "description": "One-way Google Drive file to Markdown sync for VS Code.",
   "version": "0.1.0",
   "publisher": "zacswolf",
   "license": "MIT",
@@ -57,7 +57,7 @@
       },
       {
         "command": "gdocSync.importGoogleDoc",
-        "title": "Import Google Doc as New Markdown File",
+        "title": "Import Google File as New Markdown File",
         "category": "GDriveSync"
       },
       {
@@ -162,6 +162,11 @@
           "default": true,
           "description": "Show a status bar item for the active linked Markdown file."
         },
+        "gdocSync.unlinkOnMarkdownDelete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically unlink a linked Markdown file when the file is deleted. Turn this off to keep the current behavior where deleted files stay linked and can be recreated by sync."
+        },
         "gdocSync.development.desktopClientId": {
           "type": "string",
           "default": "",
@@ -176,6 +181,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Optional override for the hosted site origin used for the OAuth bridge and Google Picker during development."
+        },
+        "gdocSync.development.loginHint": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional Google account email hint to reduce repeated account selection in the hosted picker during development."
         }
       }
     }
@@ -198,5 +208,11 @@
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.1"
+  },
+  "dependencies": {
+    "@types/turndown": "^5.0.6",
+    "mammoth": "^1.12.0",
+    "turndown": "^7.2.2",
+    "turndown-plugin-gfm": "^1.0.2"
   }
 }

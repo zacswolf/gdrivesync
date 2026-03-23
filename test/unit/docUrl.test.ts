@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { buildGoogleDocUrl, parseGoogleDocInput } from "../../src/utils/docUrl";
+import { buildGoogleDocUrl, buildGoogleDriveFileUrl, parseGoogleDocInput } from "../../src/utils/docUrl";
 
 describe("parseGoogleDocInput", () => {
-  it("parses a raw document ID", () => {
+  it("parses a raw file ID", () => {
     expect(parseGoogleDocInput("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")).toEqual({
       fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
-      sourceUrl: buildGoogleDocUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")
+      sourceUrl: buildGoogleDriveFileUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")
     });
   });
 
@@ -19,6 +19,20 @@ describe("parseGoogleDocInput", () => {
       fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
       sourceUrl: buildGoogleDocUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789"),
       resourceKey: "0-abc123"
+    });
+  });
+
+  it("parses a Drive file URL", () => {
+    expect(parseGoogleDocInput("https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz123456789/view")).toEqual({
+      fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
+      sourceUrl: buildGoogleDriveFileUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")
+    });
+  });
+
+  it("parses a Drive URL with an id query parameter", () => {
+    expect(parseGoogleDocInput("https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")).toEqual({
+      fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
+      sourceUrl: buildGoogleDriveFileUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")
     });
   });
 

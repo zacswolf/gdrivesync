@@ -78,7 +78,8 @@ function normalizeBaseUrl(rawValue: string | undefined): string {
 function buildConfig(
   desktopClientId: string,
   hostedBaseUrlOverride?: string,
-  desktopClientSecret?: string
+  desktopClientSecret?: string,
+  loginHint?: string
 ): GoogleReleaseConfig {
   const hostedBaseUrl = normalizeBaseUrl(hostedBaseUrlOverride);
   return {
@@ -87,7 +88,8 @@ function buildConfig(
     hostedBaseUrl,
     oauthBridgeUrl: `${hostedBaseUrl}/oauth/google/bridge`,
     pickerUrl: `${hostedBaseUrl}/picker`,
-    scope: DEFAULT_SCOPE
+    scope: DEFAULT_SCOPE,
+    loginHint: loginHint?.trim() || undefined
   };
 }
 
@@ -99,19 +101,21 @@ export function resolveExtensionGoogleConfig(): GoogleReleaseConfig {
     DEFAULT_DESKTOP_CLIENT_ID;
   const desktopClientSecret =
     config.get<string>("development.desktopClientSecret") || process.env.GDOCSYNC_DESKTOP_CLIENT_SECRET;
+  const loginHint = config.get<string>("development.loginHint") || process.env.GDOCSYNC_LOGIN_HINT;
   const hostedBaseUrl =
     config.get<string>("development.hostedBaseUrl") ||
     process.env.GDOCSYNC_HOSTED_BASE_URL ||
     DEFAULT_HOSTED_BASE_URL;
 
-  return buildConfig(desktopClientId, hostedBaseUrl, desktopClientSecret);
+  return buildConfig(desktopClientId, hostedBaseUrl, desktopClientSecret, loginHint);
 }
 
 export function resolveCliGoogleConfig(env: NodeJS.ProcessEnv = process.env): GoogleReleaseConfig {
   return buildConfig(
     env.GDOCSYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID,
     env.GDOCSYNC_HOSTED_BASE_URL,
-    env.GDOCSYNC_DESKTOP_CLIENT_SECRET
+    env.GDOCSYNC_DESKTOP_CLIENT_SECRET,
+    env.GDOCSYNC_LOGIN_HINT
   );
 }
 

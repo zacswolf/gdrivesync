@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import * as vscode from "vscode";
 
-import { GoogleReleaseConfig, ParsedDocInput, PickerRequestPayload, PickerSelection } from "./types";
+import { GoogleReleaseConfig, ParsedDocInput, PickerRequestPayload } from "./types";
 import { SyncProfile } from "./syncProfiles";
 import { decodeBase64UrlJson, encodeBase64UrlJson } from "./utils/base64url";
 import { createLocalCallbackServer } from "./utils/localCallbackServer";
@@ -10,7 +10,7 @@ import { createLocalCallbackServer } from "./utils/localCallbackServer";
 export class PickerClient {
   constructor(private readonly configProvider: () => GoogleReleaseConfig) {}
 
-  async pickDocument(profile: SyncProfile, initialFile?: ParsedDocInput): Promise<PickerSelection | undefined> {
+  async pickDocument(profile: SyncProfile, initialFile?: ParsedDocInput): Promise<ParsedDocInput | undefined> {
     const callbackServer = await createLocalCallbackServer(
       "/picker/callback",
       `${profile.sourceTypeLabel} selected`,
@@ -19,13 +19,13 @@ export class PickerClient {
     const request = encodeBase64UrlJson({
       nonce: randomUUID(),
       localRedirect: callbackServer.localRedirect,
-      profileId: profile.id,
-      sourceMimeType: profile.sourceMimeType,
       sourceTypeLabel: profile.sourceTypeLabel,
       pickerViewId: profile.pickerViewId,
       pickerMimeTypes: profile.pickerMimeTypes,
+      supportedMimeTypes: profile.pickerMimeTypes.split(",").map((value) => value.trim()).filter(Boolean),
       hintFileId: initialFile?.fileId,
-      resourceKey: initialFile?.resourceKey
+      resourceKey: initialFile?.resourceKey,
+      loginHint: this.configProvider().loginHint
     });
     const pickerUrl = new URL(this.configProvider().pickerUrl);
     pickerUrl.hash = new URLSearchParams({ request }).toString();
@@ -58,18 +58,14 @@ export class PickerClient {
       }
 
       const fileId = callbackParams.get("fileId");
-      const title = callbackParams.get("title");
-      if (!fileId || !title) {
+      if (!fileId) {
         throw new Error("Google Picker returned without a file selection.");
       }
 
       return {
-        profileId: profile.id,
         fileId,
-        title,
-        sourceMimeType: callbackParams.get("sourceMimeType") || profile.sourceMimeType,
-        resourceKey: callbackParams.get("resourceKey") || undefined,
-        sourceUrl: callbackParams.get("sourceUrl") || profile.buildSourceUrl(fileId)
+        sourceUrl: callbackParams.get("sourceUrl") || profile.buildSourceUrl(fileId),
+        resourceKey: callbackParams.get("resourceKey") || undefined
       };
     } finally {
       await callbackServer.dispose();

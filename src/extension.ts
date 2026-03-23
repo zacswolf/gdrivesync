@@ -7,7 +7,7 @@ import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { PickerClient } from "./pickerClient";
 import { assertDesktopClientConfigured, loadDevelopmentEnv, resolveExtensionGoogleConfig } from "./runtimeConfig";
-import { getDefaultSyncProfile } from "./syncProfiles";
+import { getDefaultSyncProfile, getSupportedSourceMimeTypes, resolveSyncProfileForMimeType } from "./syncProfiles";
 import { SyncManager } from "./syncManager";
 import { SecretStorageTokenStore } from "./tokenStores";
 import { ParsedDocInput, PickerSelection } from "./types";
@@ -35,10 +35,14 @@ function sanitizeError(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
-async function promptForDocInput(): Promise<ParsedDocInput | undefined> {
+function buildCodeLensTitle(syncOnOpen: boolean): string {
+  return syncOnOpen ? "Sync from Google • Auto on Open" : "Sync from Google";
+}
+
+async function promptForGoogleFileInput(): Promise<ParsedDocInput | undefined> {
   const value = await vscode.window.showInputBox({
-    placeHolder: "Paste a Google Docs URL or doc ID",
-    prompt: "Paste a Google Docs URL or raw doc ID."
+    placeHolder: "Paste a Google Docs, Drive, or DOCX file URL or ID",
+    prompt: "Paste a Google Docs or Google Drive file URL, or a raw file ID."
   });
   if (!value) {
     return undefined;
@@ -46,7 +50,7 @@ async function promptForDocInput(): Promise<ParsedDocInput | undefined> {
 
   const parsed = parseGoogleDocInput(value);
   if (!parsed) {
-    throw new Error("That does not look like a Google Docs URL or document ID.");
+    throw new Error("That does not look like a supported Google file URL or file ID.");
   }
 
   return parsed;
@@ -60,7 +64,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const driveClient = new DriveClient();
   const pickerClient = new PickerClient(resolveExtensionGoogleConfig);
   const syncManager = new SyncManager(authManager, driveClient, manifestStore);
-  const syncProfile = getDefaultSyncProfile();
+  const selectionProfile = getDefaultSyncProfile();
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const codeLensEmitter = new vscode.EventEmitter<void>();
 
@@ -110,6 +114,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBarItem.text =
       linkedFile.entry.syncOnOpen ? "$(sync) Sync from Google (Auto)" : "$(sync) Sync from Google";
     statusBarItem.tooltip = `${linkedFile.entry.title}\nClick to sync from Google.`;
+    statusBarItem.backgroundColor = new vscode.ThemeColor("statusBarItem.prominentBackground");
     statusBarItem.show();
   }
 
@@ -117,6 +122,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await ensureTrustedWorkspace();
     await ensureDesktopConfig();
     await authManager.ensureSignedIn();
+  }
+
+  async function resolveSelectionFromInput(parsedInput: ParsedDocInput): Promise<PickerSelection> {
+    const accessToken = await authManager.getAccessToken();
+    const metadata = await driveClient.getFileMetadata(accessToken, {
+      fileId: parsedInput.fileId,
+      resourceKey: parsedInput.resourceKey,
+      expectedMimeTypes: getSupportedSourceMimeTypes(),
+      sourceTypeLabel: "supported Google file"
+    });
+    const resolvedProfile = resolveSyncProfileForMimeType(metadata.mimeType);
+    if (!resolvedProfile) {
+      throw new Error("This Google file type is not supported for Markdown sync yet.");
+    }
+
+    return {
+      profileId: resolvedProfile.id,
+      fileId: metadata.id,
+      title: metadata.name,
+      sourceUrl: metadata.webViewLink || resolvedProfile.buildSourceUrl(metadata.id),
+      sourceMimeType: metadata.mimeType,
+      resourceKey: metadata.resourceKey || parsedInput.resourceKey
+    };
   }
 
   async function selectDocument(): Promise<PickerSelection | undefined> {
@@ -128,12 +156,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           detail: "Open the hosted Google Picker flow."
         },
         {
-          label: "Paste Google Docs URL or ID",
-          detail: "Paste a direct Docs URL or raw document ID."
+          label: "Paste Google file URL or ID",
+          detail: "Paste a direct Docs, Drive, or DOCX file URL, or a raw file ID."
         }
       ],
       {
-        placeHolder: `Choose how to link your ${syncProfile.sourceTypeLabel}`
+        placeHolder: `Choose how to link your ${selectionProfile.sourceTypeLabel}`
       }
     );
 
@@ -142,36 +170,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (selectionMode.label === "Select from Google Drive") {
-      return pickerClient.pickDocument(syncProfile);
+      const pickedFile = await pickerClient.pickDocument(selectionProfile);
+      return pickedFile ? resolveSelectionFromInput(pickedFile) : undefined;
     }
 
-    const parsedInput = await promptForDocInput();
+    const parsedInput = await promptForGoogleFileInput();
     if (!parsedInput) {
       return undefined;
     }
 
     try {
-      const accessToken = await authManager.getAccessToken();
-      const metadata = await driveClient.getFileMetadata(accessToken, {
-        fileId: parsedInput.fileId,
-        resourceKey: parsedInput.resourceKey,
-        expectedMimeType: syncProfile.sourceMimeType,
-        sourceTypeLabel: syncProfile.sourceTypeLabel
-      });
-      return {
-        profileId: syncProfile.id,
-        fileId: metadata.id,
-        title: metadata.name,
-        sourceUrl: metadata.webViewLink || syncProfile.buildSourceUrl(metadata.id),
-        sourceMimeType: metadata.mimeType,
-        resourceKey: metadata.resourceKey || parsedInput.resourceKey
-      };
+      return await resolveSelectionFromInput(parsedInput);
     } catch (error) {
       if (error instanceof PickerGrantRequiredError) {
         void vscode.window.showInformationMessage(
-          `Google needs you to open that ${syncProfile.sourceTypeLabel} through Picker once before drive.file access is granted.`
+          `Google needs one browser grant for that ${selectionProfile.sourceTypeLabel} before drive.file access is available.`
         );
-        return pickerClient.pickDocument(syncProfile, parsedInput);
+        const pickedFile = await pickerClient.pickDocument(selectionProfile, parsedInput);
+        return pickedFile ? resolveSelectionFromInput(pickedFile) : undefined;
       }
 
       throw error;
@@ -191,7 +207,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage(outcome.message);
   }
 
-  async function importGoogleDoc(): Promise<void> {
+  async function importGoogleFile(): Promise<void> {
     await ensureSignedIn();
     const selection = await selectDocument();
     if (!selection) {
@@ -200,17 +216,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
-      throw new Error(`Open a workspace folder before importing a ${syncProfile.sourceTypeLabel}.`);
+      throw new Error(`Open a workspace folder before importing a ${selectionProfile.sourceTypeLabel}.`);
     }
 
     const targetUri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(
-        path.join(workspaceFolder.uri.fsPath, `${slugifyForFileName(selection.title)}.${syncProfile.targetFileExtension}`)
+        path.join(workspaceFolder.uri.fsPath, `${slugifyForFileName(selection.title)}.${selectionProfile.targetFileExtension}`)
       ),
       filters: {
-        Markdown: [syncProfile.targetFileExtension]
+        Markdown: [selectionProfile.targetFileExtension]
       },
-      saveLabel: `Import ${syncProfile.sourceTypeLabel}`
+      saveLabel: `Import ${selectionProfile.sourceTypeLabel}`
     });
 
     if (!targetUri) {
@@ -251,10 +267,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   async function unlinkCurrentFile(targetUri?: vscode.Uri): Promise<void> {
     await ensureTrustedWorkspace();
     const markdownUri = getTargetMarkdownUri(targetUri);
-    const removed = await manifestStore.unlinkFile(markdownUri);
+    const removed = await syncManager.unlinkFile(markdownUri, { removeGeneratedAssets: false });
     await refreshUi();
     if (removed) {
       void vscode.window.showInformationMessage("The file is no longer linked to Google.");
+    }
+  }
+
+  async function handleDeletedMarkdownFiles(files: readonly vscode.Uri[]): Promise<void> {
+    if (!vscode.workspace.isTrusted) {
+      return;
+    }
+
+    const shouldUnlinkOnDelete = vscode.workspace
+      .getConfiguration("gdocSync")
+      .get<boolean>("unlinkOnMarkdownDelete", true);
+    if (!shouldUnlinkOnDelete) {
+      return;
+    }
+
+    let unlinkedCount = 0;
+    for (const file of files) {
+      if (!isMarkdownUri(file)) {
+        continue;
+      }
+
+      const removed = await syncManager.unlinkFile(file, { removeGeneratedAssets: true });
+      if (removed) {
+        unlinkedCount += 1;
+      }
+    }
+
+    if (unlinkedCount > 0) {
+      await refreshUi();
+      void vscode.window.setStatusBarMessage(
+        unlinkedCount === 1 ? "Unlinked deleted Markdown file from Google." : `Unlinked ${unlinkedCount} deleted Markdown files from Google.`,
+        4000
+      );
     }
   }
 
@@ -272,7 +321,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       return [
         new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
-          title: "Sync from Google",
+          title: buildCodeLensTitle(linkedFile.entry.syncOnOpen),
           tooltip: `Sync ${linkedFile.entry.title} from Google`,
           command: "gdocSync.syncCurrentFile",
           arguments: [document.uri]
@@ -315,7 +364,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("gdocSync.importGoogleDoc", async () => {
       try {
-        await importGoogleDoc();
+        await importGoogleFile();
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
@@ -358,6 +407,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (
         event.affectsConfiguration("gdocSync.showStatusBar") ||
         event.affectsConfiguration("gdocSync.syncOnOpenDefault") ||
+        event.affectsConfiguration("gdocSync.unlinkOnMarkdownDelete") ||
         event.affectsConfiguration("gdocSync.development.desktopClientId") ||
         event.affectsConfiguration("gdocSync.development.desktopClientSecret") ||
         event.affectsConfiguration("gdocSync.development.hostedBaseUrl")
@@ -369,6 +419,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (document.uri.scheme === "file" && document.languageId === "markdown" && vscode.workspace.isTrusted) {
         syncManager.scheduleSyncOnOpen(document.uri);
       }
+    }),
+    vscode.workspace.onDidDeleteFiles((event) => {
+      void handleDeletedMarkdownFiles(event.files);
     })
   );
 
