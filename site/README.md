@@ -6,9 +6,10 @@ Deploy [public](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site
 
 Before deploy:
 
-1. Replace the placeholder values in [site-config.js](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public/site-config.js)
-2. Confirm the Google web OAuth client includes the Cloudflare Pages production origin
-3. Confirm the consent screen homepage and privacy links point at the deployed site
+1. Leave [site-config.js](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public/site-config.js) as a placeholder in git
+2. Set the real `GDOCSYNC_PICKER_API_KEY` GitHub secret used by the Pages deploy workflow
+3. Confirm the Google web OAuth client includes the Cloudflare Pages production origin
+4. Confirm the consent screen homepage and privacy links point at the deployed site
 
 The Picker page signs in with the web client, opens Google Picker, and returns the selected doc metadata to the extension. Desktop OAuth happens directly against the extension's localhost callback and does not rely on the hosted site.
 

@@ -4,7 +4,7 @@ import { GoogleReleaseConfig } from "./types";
 
 const DEFAULT_HOSTED_BASE_URL = "https://gdrivesync.zacswolf.com";
 const DEFAULT_SCOPE = "https://www.googleapis.com/auth/drive.file";
-const PLACEHOLDER_CLIENT_ID = "REPLACE_WITH_GOOGLE_DESKTOP_CLIENT_ID.apps.googleusercontent.com";
+const PLACEHOLDER_CLIENT_ID = "532481685126-bjdbo5o6924bh41314la7s6ph4n02s62.apps.googleusercontent.com";
 
 function normalizeBaseUrl(rawValue: string | undefined): string {
   const candidate = rawValue?.trim() || DEFAULT_HOSTED_BASE_URL;
