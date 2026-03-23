@@ -181,7 +181,7 @@
           const tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: googleWebClientId,
             scope: DRIVE_FILE_SCOPE,
-            prompt: "consent",
+            prompt: "",
             callback: (response) => {
               if (response.error) {
                 reject(new Error(response.error));
@@ -263,6 +263,10 @@
           .setSelectFolderEnabled(false)
           .setMimeTypes(request.payload.pickerMimeTypes);
 
+        if (request.payload.hintFileId) {
+          docsView.setFileIds(request.payload.hintFileId);
+        }
+
         const picker = new google.picker.PickerBuilder()
           .setDeveloperKey(config.googleApiKey)
           .setAppId(String(config.googleProjectNumber))
@@ -302,7 +306,11 @@
           return;
         }
 
-        setHint("");
+        setHint(
+          request.payload.hintFileId
+            ? `Google still needs a one-time Picker confirmation for that file: ${request.payload.hintFileId}`
+            : ""
+        );
         setStatus("Opening Google Picker…");
         await loadPickerApi();
         openPicker(config, request, accessToken);
