@@ -1,6 +1,12 @@
+export type SyncProfileId = "google-doc-markdown";
+
 export interface LinkedFileEntry {
-  docId: string;
+  profileId: SyncProfileId;
+  fileId: string;
   sourceUrl: string;
+  sourceMimeType: string;
+  exportMimeType: string;
+  localFormat: string;
   resourceKey?: string;
   title: string;
   syncOnOpen: boolean;
@@ -10,12 +16,13 @@ export interface LinkedFileEntry {
 }
 
 export interface SyncManifest {
-  version: 1;
+  version: 2;
   files: Record<string, LinkedFileEntry>;
 }
 
 export interface GoogleReleaseConfig {
   desktopClientId: string;
+  desktopClientSecret?: string;
   hostedBaseUrl: string;
   oauthBridgeUrl: string;
   pickerUrl: string;
@@ -37,14 +44,21 @@ export interface OAuthStatePayload {
 export interface PickerRequestPayload {
   nonce: string;
   localRedirect: string;
-  hintDocId?: string;
+  profileId: SyncProfileId;
+  sourceMimeType: string;
+  sourceTypeLabel: string;
+  pickerViewId: string;
+  pickerMimeTypes: string;
+  hintFileId?: string;
   resourceKey?: string;
 }
 
 export interface PickerSelection {
-  docId: string;
+  profileId: SyncProfileId;
+  fileId: string;
   title: string;
   sourceUrl: string;
+  sourceMimeType: string;
   resourceKey?: string;
 }
 
@@ -59,7 +73,7 @@ export interface DriveFileMetadata {
 }
 
 export interface ParsedDocInput {
-  docId: string;
+  fileId: string;
   sourceUrl: string;
   resourceKey?: string;
 }

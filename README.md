@@ -10,9 +10,10 @@ One-way Google Docs to Markdown sync for VS Code. Link a Google Doc to a normal 
 - Google Drive export to `text/markdown`
 - Workspace sidecar manifest in `.gdocsync.json`
 - Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
-- Status bar and editor/explorer command contributions for Markdown files
+- Status bar, CodeLens, and editor/explorer command contributions for linked Markdown files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
 - Thin CLI harness for local auth/export testing
+- Internal sync profiles so Docs -> Markdown is the first export mode rather than a one-off special case
 
 ## Project layout
 
@@ -28,15 +29,32 @@ One-way Google Docs to Markdown sync for VS Code. Link a Google Doc to a normal 
 npm install
 ```
 
-2. Add your Google desktop OAuth client ID while developing:
+2. Add your Google desktop OAuth config while developing. The easiest path is a local git-ignored `.env` file in the repo root:
+
+```bash
+cp .env.example .env
+```
+
+Then fill in:
+
+- `GDOCSYNC_DESKTOP_CLIENT_ID`
+- `GDOCSYNC_DESKTOP_CLIENT_SECRET`
+- optionally `GDOCSYNC_HOSTED_BASE_URL` for non-production site testing
+
+The extension automatically loads `.env` and `.env.local` from the repo root in development.
+
+You can also set these via:
 
 - VS Code setting: `gdocSync.development.desktopClientId`
+- VS Code setting: `gdocSync.development.desktopClientSecret`
 - Or shell env: `GDOCSYNC_DESKTOP_CLIENT_ID`
+- Or shell env: `GDOCSYNC_DESKTOP_CLIENT_SECRET`
 
 3. If you are testing against a non-production hosted site, also set:
 
 - VS Code setting: `gdocSync.development.hostedBaseUrl`
-- Or shell env: `GDOCSYNC_HOSTED_BASE_URL`
+- Shell env: `GDOCSYNC_HOSTED_BASE_URL`
+- Or `GDOCSYNC_HOSTED_BASE_URL` in `.env.local`
 
 4. Build and test:
 

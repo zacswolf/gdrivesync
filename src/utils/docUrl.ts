@@ -10,7 +10,7 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
 
   if (GOOGLE_DOC_ID_PATTERN.test(trimmed)) {
     return {
-      docId: trimmed,
+      fileId: trimmed,
       sourceUrl: buildGoogleDocUrl(trimmed)
     };
   }
@@ -23,10 +23,10 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
     }
 
     const resourceKey = url.searchParams.get("resourcekey") || url.searchParams.get("resourceKey") || undefined;
-    const docId = match[1];
+    const fileId = match[1];
     return {
-      docId,
-      sourceUrl: buildGoogleDocUrl(docId),
+      fileId,
+      sourceUrl: buildGoogleDocUrl(fileId),
       resourceKey
     };
   } catch {
@@ -34,6 +34,6 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
   }
 }
 
-export function buildGoogleDocUrl(docId: string): string {
-  return `https://docs.google.com/document/d/${docId}/edit`;
+export function buildGoogleDocUrl(fileId: string): string {
+  return `https://docs.google.com/document/d/${fileId}/edit`;
 }

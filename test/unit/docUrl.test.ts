@@ -5,7 +5,7 @@ import { buildGoogleDocUrl, parseGoogleDocInput } from "../../src/utils/docUrl";
 describe("parseGoogleDocInput", () => {
   it("parses a raw document ID", () => {
     expect(parseGoogleDocInput("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")).toEqual({
-      docId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
+      fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
       sourceUrl: buildGoogleDocUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")
     });
   });
@@ -16,7 +16,7 @@ describe("parseGoogleDocInput", () => {
         "https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz123456789/edit?resourcekey=0-abc123"
       )
     ).toEqual({
-      docId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
+      fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
       sourceUrl: buildGoogleDocUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789"),
       resourceKey: "0-abc123"
     });

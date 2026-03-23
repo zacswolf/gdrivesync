@@ -7,6 +7,7 @@ import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
+import { getSyncProfile } from "./syncProfiles";
 import { PickerSelection, SyncOutcome } from "./types";
 import { sha256Text } from "./utils/hash";
 
@@ -22,9 +23,14 @@ export class SyncManager {
 
   async linkFile(fileUri: vscode.Uri, selection: PickerSelection): Promise<SyncOutcome> {
     const syncOnOpen = vscode.workspace.getConfiguration("gdocSync").get<boolean>("syncOnOpenDefault", false);
+    const profile = getSyncProfile(selection.profileId);
     await this.manifestStore.linkFile(fileUri, {
-      docId: selection.docId,
+      profileId: selection.profileId,
+      fileId: selection.fileId,
       sourceUrl: selection.sourceUrl,
+      sourceMimeType: selection.sourceMimeType || profile.sourceMimeType,
+      exportMimeType: profile.exportMimeType,
+      localFormat: profile.localFormat,
       resourceKey: selection.resourceKey,
       title: selection.title,
       syncOnOpen,
@@ -93,7 +99,7 @@ export class SyncManager {
       try {
         const outcome = await this.syncFile(fileUri, { reason: "open" });
         if (outcome.status === "synced") {
-          void vscode.window.setStatusBarMessage(`Synced ${path.basename(fileUri.fsPath)} from Google Docs`, 3500);
+          void vscode.window.setStatusBarMessage(`Synced ${path.basename(fileUri.fsPath)} from Google`, 3500);
         }
       } catch (error) {
         void vscode.window.showErrorMessage(this.toErrorMessage(error));
@@ -106,11 +112,17 @@ export class SyncManager {
   private async doSyncFile(fileUri: vscode.Uri, options?: { reason?: "manual" | "open" | "link" }): Promise<SyncOutcome> {
     const linkedFile = await this.manifestStore.getLinkedFile(fileUri);
     if (!linkedFile) {
-      throw new Error("This Markdown file is not linked to a Google Doc yet.");
+      throw new Error("This file is not linked to a Google source yet.");
     }
 
+    const profile = getSyncProfile(linkedFile.entry.profileId);
     const accessToken = await this.authManager.getAccessToken();
-    const metadata = await this.driveClient.getFileMetadata(accessToken, linkedFile.entry.docId, linkedFile.entry.resourceKey);
+    const metadata = await this.driveClient.getFileMetadata(accessToken, {
+      fileId: linkedFile.entry.fileId,
+      resourceKey: linkedFile.entry.resourceKey,
+      expectedMimeType: linkedFile.entry.sourceMimeType,
+      sourceTypeLabel: profile.sourceTypeLabel
+    });
     if (linkedFile.entry.lastDriveVersion && metadata.version === linkedFile.entry.lastDriveVersion) {
       return {
         status: "skipped",
@@ -121,7 +133,7 @@ export class SyncManager {
     const localState = await this.readLocalFileState(fileUri);
     if (needsOverwriteConfirmation(localState, linkedFile.entry.lastLocalHash)) {
       const selection = await vscode.window.showWarningMessage(
-        `${path.basename(fileUri.fsPath)} has local changes. Replace it with the latest Google Doc content?`,
+        `${path.basename(fileUri.fsPath)} has local changes. Replace it with the latest Google content?`,
         { modal: true },
         "Overwrite"
       );
@@ -133,13 +145,19 @@ export class SyncManager {
       }
     }
 
-    const markdown = await this.driveClient.exportMarkdown(accessToken, linkedFile.entry.docId, linkedFile.entry.resourceKey);
-    await this.writeMarkdown(fileUri, markdown);
-    const nextHash = sha256Text(markdown);
+    const text = await this.driveClient.exportText(
+      accessToken,
+      linkedFile.entry.fileId,
+      linkedFile.entry.exportMimeType,
+      linkedFile.entry.resourceKey
+    );
+    await this.writeTextFile(fileUri, text);
+    const nextHash = sha256Text(text);
     await this.manifestStore.updateLinkedFile(fileUri, (entry) => ({
       ...entry,
       title: metadata.name,
-      sourceUrl: metadata.webViewLink || entry.sourceUrl,
+      sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
+      sourceMimeType: metadata.mimeType,
       resourceKey: metadata.resourceKey || entry.resourceKey,
       lastDriveVersion: metadata.version,
       lastLocalHash: nextHash,
@@ -147,7 +165,7 @@ export class SyncManager {
     }));
 
     if (options?.reason === "manual" || options?.reason === "link") {
-      void vscode.window.setStatusBarMessage(`Synced ${path.basename(fileUri.fsPath)} from Google Docs`, 4000);
+      void vscode.window.setStatusBarMessage(`Synced ${path.basename(fileUri.fsPath)} from Google`, 4000);
     }
 
     return {
@@ -185,15 +203,15 @@ export class SyncManager {
     }
   }
 
-  private async writeMarkdown(fileUri: vscode.Uri, markdown: string): Promise<void> {
+  private async writeTextFile(fileUri: vscode.Uri, text: string): Promise<void> {
     const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === fileUri.toString());
     if (openDocument) {
       const fullRange = new vscode.Range(openDocument.positionAt(0), openDocument.positionAt(openDocument.getText().length));
       const edit = new vscode.WorkspaceEdit();
-      edit.replace(fileUri, fullRange, markdown);
+      edit.replace(fileUri, fullRange, text);
       const applied = await vscode.workspace.applyEdit(edit);
       if (!applied) {
-        throw new Error("VS Code could not update the open Markdown document.");
+        throw new Error("VS Code could not update the open file.");
       }
 
       await openDocument.save();
@@ -201,10 +219,10 @@ export class SyncManager {
     }
 
     await mkdir(path.dirname(fileUri.fsPath), { recursive: true });
-    await writeFile(fileUri.fsPath, markdown, "utf8");
+    await writeFile(fileUri.fsPath, text, "utf8");
   }
 
   private toErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : "Google Docs sync failed.";
+    return error instanceof Error ? error.message : "Google sync failed.";
   }
 }

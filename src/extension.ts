@@ -6,7 +6,8 @@ import { DriveClient, PickerGrantRequiredError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { PickerClient } from "./pickerClient";
-import { assertDesktopClientConfigured, resolveExtensionGoogleConfig } from "./runtimeConfig";
+import { assertDesktopClientConfigured, loadDevelopmentEnv, resolveExtensionGoogleConfig } from "./runtimeConfig";
+import { getDefaultSyncProfile } from "./syncProfiles";
 import { SyncManager } from "./syncManager";
 import { SecretStorageTokenStore } from "./tokenStores";
 import { ParsedDocInput, PickerSelection } from "./types";
@@ -52,12 +53,27 @@ async function promptForDocInput(): Promise<ParsedDocInput | undefined> {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  await loadDevelopmentEnv(context.extensionPath);
+
   const manifestStore = new ManifestStore();
   const authManager = new GoogleAuthManager(new SecretStorageTokenStore(context.secrets), resolveExtensionGoogleConfig);
   const driveClient = new DriveClient();
   const pickerClient = new PickerClient(resolveExtensionGoogleConfig);
   const syncManager = new SyncManager(authManager, driveClient, manifestStore);
+  const syncProfile = getDefaultSyncProfile();
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  const codeLensEmitter = new vscode.EventEmitter<void>();
+
+  async function refreshUi(): Promise<void> {
+    await updateStatusBar();
+    codeLensEmitter.fire();
+  }
+
+  async function updateActiveFileContext(): Promise<void> {
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    const activeLinkedFile = isMarkdownUri(activeUri) ? await manifestStore.getLinkedFile(activeUri) : undefined;
+    await vscode.commands.executeCommand("setContext", "gdocSync.activeFileLinked", Boolean(activeLinkedFile));
+  }
 
   async function ensureTrustedWorkspace(): Promise<void> {
     if (!vscode.workspace.isTrusted) {
@@ -70,6 +86,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function updateStatusBar(): Promise<void> {
+    await updateActiveFileContext();
+
     const shouldShow = vscode.workspace.getConfiguration("gdocSync").get<boolean>("showStatusBar", true);
     if (!shouldShow || !vscode.workspace.isTrusted) {
       statusBarItem.hide();
@@ -89,8 +107,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     statusBarItem.command = "gdocSync.syncCurrentFile";
-    statusBarItem.text = linkedFile.entry.syncOnOpen ? "$(sync) GDoc: Auto" : "$(cloud-download) GDoc";
-    statusBarItem.tooltip = `${linkedFile.entry.title}\nClick to sync from Google Docs.`;
+    statusBarItem.text =
+      linkedFile.entry.syncOnOpen ? "$(sync) Sync from Google (Auto)" : "$(sync) Sync from Google";
+    statusBarItem.tooltip = `${linkedFile.entry.title}\nClick to sync from Google.`;
     statusBarItem.show();
   }
 
@@ -114,7 +133,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       ],
       {
-        placeHolder: "Choose how to link your Google Doc"
+        placeHolder: `Choose how to link your ${syncProfile.sourceTypeLabel}`
       }
     );
 
@@ -123,7 +142,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (selectionMode.label === "Select from Google Drive") {
-      return pickerClient.pickDocument();
+      return pickerClient.pickDocument(syncProfile);
     }
 
     const parsedInput = await promptForDocInput();
@@ -133,19 +152,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     try {
       const accessToken = await authManager.getAccessToken();
-      const metadata = await driveClient.getFileMetadata(accessToken, parsedInput.docId, parsedInput.resourceKey);
+      const metadata = await driveClient.getFileMetadata(accessToken, {
+        fileId: parsedInput.fileId,
+        resourceKey: parsedInput.resourceKey,
+        expectedMimeType: syncProfile.sourceMimeType,
+        sourceTypeLabel: syncProfile.sourceTypeLabel
+      });
       return {
-        docId: metadata.id,
+        profileId: syncProfile.id,
+        fileId: metadata.id,
         title: metadata.name,
-        sourceUrl: metadata.webViewLink || parsedInput.sourceUrl,
+        sourceUrl: metadata.webViewLink || syncProfile.buildSourceUrl(metadata.id),
+        sourceMimeType: metadata.mimeType,
         resourceKey: metadata.resourceKey || parsedInput.resourceKey
       };
     } catch (error) {
       if (error instanceof PickerGrantRequiredError) {
         void vscode.window.showInformationMessage(
-          "Google needs you to open that Doc through Picker once before drive.file access is granted."
+          `Google needs you to open that ${syncProfile.sourceTypeLabel} through Picker once before drive.file access is granted.`
         );
-        return pickerClient.pickDocument(parsedInput);
+        return pickerClient.pickDocument(syncProfile, parsedInput);
       }
 
       throw error;
@@ -161,7 +187,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     const outcome = await syncManager.linkFile(markdownUri, selection);
-    await updateStatusBar();
+    await refreshUi();
     void vscode.window.showInformationMessage(outcome.message);
   }
 
@@ -174,15 +200,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
-      throw new Error("Open a workspace folder before importing a Google Doc.");
+      throw new Error(`Open a workspace folder before importing a ${syncProfile.sourceTypeLabel}.`);
     }
 
     const targetUri = await vscode.window.showSaveDialog({
-      defaultUri: vscode.Uri.file(path.join(workspaceFolder.uri.fsPath, `${slugifyForFileName(selection.title)}.md`)),
+      defaultUri: vscode.Uri.file(
+        path.join(workspaceFolder.uri.fsPath, `${slugifyForFileName(selection.title)}.${syncProfile.targetFileExtension}`)
+      ),
       filters: {
-        Markdown: ["md"]
+        Markdown: [syncProfile.targetFileExtension]
       },
-      saveLabel: "Import Google Doc"
+      saveLabel: `Import ${syncProfile.sourceTypeLabel}`
     });
 
     if (!targetUri) {
@@ -196,7 +224,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const outcome = await syncManager.linkFile(targetUri, selection);
     const openedDocument = await vscode.workspace.openTextDocument(targetUri);
     await vscode.window.showTextDocument(openedDocument, { preview: false });
-    await updateStatusBar();
+    await refreshUi();
     void vscode.window.showInformationMessage(outcome.message);
   }
 
@@ -204,7 +232,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await ensureSignedIn();
     const markdownUri = getTargetMarkdownUri(targetUri);
     const outcome = await syncManager.syncFile(markdownUri, { reason: "manual" });
-    await updateStatusBar();
+    await refreshUi();
     if (outcome.status !== "skipped") {
       void vscode.window.showInformationMessage(outcome.message);
     }
@@ -214,7 +242,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await ensureTrustedWorkspace();
     const markdownUri = getTargetMarkdownUri(targetUri);
     const enabled = await syncManager.toggleSyncOnOpen(markdownUri);
-    await updateStatusBar();
+    await refreshUi();
     void vscode.window.showInformationMessage(
       enabled ? "Auto-sync on open is now enabled for this Markdown file." : "Auto-sync on open is now disabled."
     );
@@ -224,20 +252,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await ensureTrustedWorkspace();
     const markdownUri = getTargetMarkdownUri(targetUri);
     const removed = await manifestStore.unlinkFile(markdownUri);
-    await updateStatusBar();
+    await refreshUi();
     if (removed) {
-      void vscode.window.showInformationMessage("The Markdown file is no longer linked to a Google Doc.");
+      void vscode.window.showInformationMessage("The file is no longer linked to Google.");
     }
   }
 
+  const codeLensProvider: vscode.CodeLensProvider = {
+    onDidChangeCodeLenses: codeLensEmitter.event,
+    async provideCodeLenses(document) {
+      if (document.uri.scheme !== "file" || document.languageId !== "markdown") {
+        return [];
+      }
+
+      const linkedFile = await manifestStore.getLinkedFile(document.uri);
+      if (!linkedFile) {
+        return [];
+      }
+
+      return [
+        new vscode.CodeLens(new vscode.Range(0, 0, 0, 0), {
+          title: "Sync from Google",
+          tooltip: `Sync ${linkedFile.entry.title} from Google`,
+          command: "gdocSync.syncCurrentFile",
+          arguments: [document.uri]
+        })
+      ];
+    }
+  };
+
   context.subscriptions.push(
     statusBarItem,
+    codeLensEmitter,
+    vscode.languages.registerCodeLensProvider({ scheme: "file", language: "markdown" }, codeLensProvider),
     vscode.commands.registerCommand("gdocSync.signIn", async () => {
       try {
         await ensureTrustedWorkspace();
         await ensureDesktopConfig();
         await authManager.signIn();
-        await updateStatusBar();
+        await refreshUi();
         void vscode.window.showInformationMessage("GDriveSync is now signed in.");
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
@@ -247,7 +300,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       try {
         await ensureTrustedWorkspace();
         await authManager.signOut();
-        await updateStatusBar();
+        await refreshUi();
         void vscode.window.showInformationMessage("Signed out of GDriveSync.");
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
@@ -306,6 +359,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         event.affectsConfiguration("gdocSync.showStatusBar") ||
         event.affectsConfiguration("gdocSync.syncOnOpenDefault") ||
         event.affectsConfiguration("gdocSync.development.desktopClientId") ||
+        event.affectsConfiguration("gdocSync.development.desktopClientSecret") ||
         event.affectsConfiguration("gdocSync.development.hostedBaseUrl")
       ) {
         void updateStatusBar();
@@ -318,7 +372,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
-  await updateStatusBar();
+  await refreshUi();
 }
 
 export function deactivate(): void {}

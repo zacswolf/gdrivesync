@@ -3,7 +3,8 @@ import path from "node:path";
 
 import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
-import { resolveCliGoogleConfig } from "./runtimeConfig";
+import { loadDevelopmentEnv, resolveCliGoogleConfig } from "./runtimeConfig";
+import { getDefaultSyncProfile } from "./syncProfiles";
 import { FileTokenStore } from "./tokenStores";
 import { parseGoogleDocInput } from "./utils/docUrl";
 
@@ -17,6 +18,8 @@ function printUsage(): void {
 }
 
 async function main(): Promise<void> {
+  await loadDevelopmentEnv(process.cwd());
+
   const [command, ...args] = process.argv.slice(2);
   if (!command) {
     printUsage();
@@ -28,6 +31,7 @@ async function main(): Promise<void> {
     resolveCliGoogleConfig
   );
   const driveClient = new DriveClient();
+  const syncProfile = getDefaultSyncProfile();
 
   if (command === "sign-in") {
     await authManager.signIn();
@@ -44,18 +48,28 @@ async function main(): Promise<void> {
   const rawInput = args[0];
   const parsedInput = rawInput ? parseGoogleDocInput(rawInput) : undefined;
   if (!parsedInput) {
-    throw new Error("Pass a Google Docs URL or raw doc ID.");
+    throw new Error("Pass a Google Docs URL or raw file ID.");
   }
 
   const accessToken = await authManager.getAccessToken();
   if (command === "metadata") {
-    const metadata = await driveClient.getFileMetadata(accessToken, parsedInput.docId, parsedInput.resourceKey);
+    const metadata = await driveClient.getFileMetadata(accessToken, {
+      fileId: parsedInput.fileId,
+      resourceKey: parsedInput.resourceKey,
+      expectedMimeType: syncProfile.sourceMimeType,
+      sourceTypeLabel: syncProfile.sourceTypeLabel
+    });
     process.stdout.write(`${JSON.stringify(metadata, null, 2)}\n`);
     return;
   }
 
   if (command === "export") {
-    const markdown = await driveClient.exportMarkdown(accessToken, parsedInput.docId, parsedInput.resourceKey);
+    const markdown = await driveClient.exportText(
+      accessToken,
+      parsedInput.fileId,
+      syncProfile.exportMimeType,
+      parsedInput.resourceKey
+    );
     const outputPath = args[1];
     if (outputPath) {
       const { writeFile } = await import("node:fs/promises");

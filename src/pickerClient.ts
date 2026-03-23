@@ -3,24 +3,29 @@ import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 
 import { GoogleReleaseConfig, ParsedDocInput, PickerRequestPayload, PickerSelection } from "./types";
+import { SyncProfile } from "./syncProfiles";
 import { decodeBase64UrlJson, encodeBase64UrlJson } from "./utils/base64url";
-import { buildGoogleDocUrl } from "./utils/docUrl";
 import { createLocalCallbackServer } from "./utils/localCallbackServer";
 
 export class PickerClient {
   constructor(private readonly configProvider: () => GoogleReleaseConfig) {}
 
-  async pickDocument(initialDoc?: ParsedDocInput): Promise<PickerSelection | undefined> {
+  async pickDocument(profile: SyncProfile, initialFile?: ParsedDocInput): Promise<PickerSelection | undefined> {
     const callbackServer = await createLocalCallbackServer(
       "/picker/callback",
-      "Google Doc selected",
-      "Your Google Doc selection has been sent back to VS Code."
+      `${profile.sourceTypeLabel} selected`,
+      `Your ${profile.sourceTypeLabel} selection has been sent back to VS Code.`
     );
     const request = encodeBase64UrlJson({
       nonce: randomUUID(),
       localRedirect: callbackServer.localRedirect,
-      hintDocId: initialDoc?.docId,
-      resourceKey: initialDoc?.resourceKey
+      profileId: profile.id,
+      sourceMimeType: profile.sourceMimeType,
+      sourceTypeLabel: profile.sourceTypeLabel,
+      pickerViewId: profile.pickerViewId,
+      pickerMimeTypes: profile.pickerMimeTypes,
+      hintFileId: initialFile?.fileId,
+      resourceKey: initialFile?.resourceKey
     });
     const pickerUrl = new URL(this.configProvider().pickerUrl);
     pickerUrl.hash = new URLSearchParams({ request }).toString();
@@ -52,17 +57,19 @@ export class PickerClient {
         throw new Error(`Google Picker failed: ${error}`);
       }
 
-      const docId = callbackParams.get("docId");
+      const fileId = callbackParams.get("fileId");
       const title = callbackParams.get("title");
-      if (!docId || !title) {
-        throw new Error("Google Picker returned without a Doc selection.");
+      if (!fileId || !title) {
+        throw new Error("Google Picker returned without a file selection.");
       }
 
       return {
-        docId,
+        profileId: profile.id,
+        fileId,
         title,
+        sourceMimeType: callbackParams.get("sourceMimeType") || profile.sourceMimeType,
         resourceKey: callbackParams.get("resourceKey") || undefined,
-        sourceUrl: callbackParams.get("sourceUrl") || buildGoogleDocUrl(docId)
+        sourceUrl: callbackParams.get("sourceUrl") || profile.buildSourceUrl(fileId)
       };
     } finally {
       await callbackServer.dispose();

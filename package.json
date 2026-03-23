@@ -7,7 +7,7 @@
   "license": "MIT",
   "private": true,
   "engines": {
-    "vscode": "^1.110.0"
+    "vscode": "^1.90.0"
   },
   "categories": [
     "Other"
@@ -42,35 +42,44 @@
     "commands": [
       {
         "command": "gdocSync.signIn",
-        "title": "GDriveSync: Sign In"
+        "title": "GDriveSync: Sign In",
+        "category": "GDriveSync"
       },
       {
         "command": "gdocSync.signOut",
-        "title": "GDriveSync: Sign Out"
+        "title": "GDriveSync: Sign Out",
+        "category": "GDriveSync"
       },
       {
         "command": "gdocSync.linkCurrentFile",
-        "title": "GDriveSync: Link Current Markdown File"
+        "title": "Link Current Markdown File",
+        "category": "GDriveSync"
       },
       {
         "command": "gdocSync.importGoogleDoc",
-        "title": "GDriveSync: Import Google Doc as New Markdown File"
+        "title": "Import Google Doc as New Markdown File",
+        "category": "GDriveSync"
       },
       {
         "command": "gdocSync.syncCurrentFile",
-        "title": "GDriveSync: Sync Current File"
+        "title": "Sync Current File",
+        "category": "GDriveSync",
+        "icon": "$(sync)"
       },
       {
         "command": "gdocSync.syncAll",
-        "title": "GDriveSync: Sync All Linked Files"
+        "title": "Sync All Linked Files",
+        "category": "GDriveSync"
       },
       {
         "command": "gdocSync.toggleSyncOnOpen",
-        "title": "GDriveSync: Toggle Sync on Open"
+        "title": "Toggle Sync on Open",
+        "category": "GDriveSync"
       },
       {
         "command": "gdocSync.unlinkCurrentFile",
-        "title": "GDriveSync: Unlink Current File"
+        "title": "Unlink Current File",
+        "category": "GDriveSync"
       }
     ],
     "menus": {
@@ -78,17 +87,17 @@
         {
           "command": "gdocSync.syncCurrentFile",
           "group": "navigation@100",
-          "when": "resourceLangId == markdown && isWorkspaceTrusted"
-        },
-        {
-          "command": "gdocSync.linkCurrentFile",
-          "group": "navigation@101",
-          "when": "resourceLangId == markdown && isWorkspaceTrusted"
+          "when": "resourceLangId == markdown && isWorkspaceTrusted && gdocSync.activeFileLinked"
         },
         {
           "command": "gdocSync.toggleSyncOnOpen",
+          "group": "navigation@101",
+          "when": "resourceLangId == markdown && isWorkspaceTrusted && gdocSync.activeFileLinked"
+        },
+        {
+          "command": "gdocSync.unlinkCurrentFile",
           "group": "navigation@102",
-          "when": "resourceLangId == markdown && isWorkspaceTrusted"
+          "when": "resourceLangId == markdown && isWorkspaceTrusted && gdocSync.activeFileLinked"
         }
       ],
       "explorer/context": [
@@ -115,36 +124,28 @@
       ],
       "commandPalette": [
         {
-          "command": "gdocSync.signIn",
-          "when": "isWorkspaceTrusted"
+          "command": "gdocSync.signIn"
         },
         {
-          "command": "gdocSync.signOut",
-          "when": "isWorkspaceTrusted"
+          "command": "gdocSync.signOut"
         },
         {
-          "command": "gdocSync.linkCurrentFile",
-          "when": "isWorkspaceTrusted"
+          "command": "gdocSync.linkCurrentFile"
         },
         {
-          "command": "gdocSync.importGoogleDoc",
-          "when": "isWorkspaceTrusted"
+          "command": "gdocSync.importGoogleDoc"
         },
         {
-          "command": "gdocSync.syncCurrentFile",
-          "when": "isWorkspaceTrusted"
+          "command": "gdocSync.syncCurrentFile"
         },
         {
-          "command": "gdocSync.syncAll",
-          "when": "isWorkspaceTrusted"
+          "command": "gdocSync.syncAll"
         },
         {
-          "command": "gdocSync.toggleSyncOnOpen",
-          "when": "isWorkspaceTrusted"
+          "command": "gdocSync.toggleSyncOnOpen"
         },
         {
-          "command": "gdocSync.unlinkCurrentFile",
-          "when": "isWorkspaceTrusted"
+          "command": "gdocSync.unlinkCurrentFile"
         }
       ]
     },
@@ -165,6 +166,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Optional override for the Google desktop OAuth client ID while developing locally."
+        },
+        "gdocSync.development.desktopClientSecret": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional override for the Google desktop OAuth client secret while developing locally. Keep this in user settings only."
         },
         "gdocSync.development.hostedBaseUrl": {
           "type": "string",

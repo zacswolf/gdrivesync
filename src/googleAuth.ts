@@ -35,6 +35,14 @@ function buildAuthorizationUrl(config: GoogleReleaseConfig, codeChallenge: strin
   return url.toString();
 }
 
+function formatTokenError(status: number, details: string, missingClientSecretHint: boolean): string {
+  if (missingClientSecretHint && details.includes('"client_secret is missing"')) {
+    return "Google token exchange failed: set gdocSync.development.desktopClientSecret in your local user settings and try sign-in again.";
+  }
+
+  return `Google token exchange failed (${status}): ${details}`;
+}
+
 export class GoogleAuthManager {
   constructor(
     private readonly tokenStore: TokenStore,
@@ -157,6 +165,9 @@ export class GoogleAuthManager {
       grant_type: "authorization_code",
       redirect_uri: redirectUri
     });
+    if (config.desktopClientSecret) {
+      body.set("client_secret", config.desktopClientSecret);
+    }
 
     const response = await this.fetchImpl("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -168,7 +179,7 @@ export class GoogleAuthManager {
 
     if (!response.ok) {
       const details = await response.text();
-      throw new Error(`Google token exchange failed (${response.status}): ${details}`);
+      throw new Error(formatTokenError(response.status, details, !config.desktopClientSecret));
     }
 
     const payload = (await response.json()) as {
@@ -194,6 +205,9 @@ export class GoogleAuthManager {
       grant_type: "refresh_token",
       refresh_token: session.refreshToken || ""
     });
+    if (config.desktopClientSecret) {
+      body.set("client_secret", config.desktopClientSecret);
+    }
 
     const response = await this.fetchImpl("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -205,7 +219,7 @@ export class GoogleAuthManager {
 
     if (!response.ok) {
       const details = await response.text();
-      throw new Error(`Google token refresh failed (${response.status}): ${details}`);
+      throw new Error(formatTokenError(response.status, details, !config.desktopClientSecret));
     }
 
     const payload = (await response.json()) as {

@@ -24,7 +24,13 @@ describe("DriveClient", () => {
       })
     );
 
-    await expect(client.getFileMetadata("token", "doc-1")).resolves.toMatchObject({
+    await expect(
+      client.getFileMetadata("token", {
+        fileId: "doc-1",
+        expectedMimeType: "application/vnd.google-apps.document",
+        sourceTypeLabel: "Google Doc"
+      })
+    ).resolves.toMatchObject({
       id: "doc-1",
       name: "Spec",
       version: "12"
@@ -33,11 +39,11 @@ describe("DriveClient", () => {
 
   it("throws a picker access error for inaccessible docs", async () => {
     const client = new DriveClient(async () => mockResponse("forbidden", { status: 403 }));
-    await expect(client.getFileMetadata("token", "doc-1")).rejects.toBeInstanceOf(PickerGrantRequiredError);
+    await expect(client.getFileMetadata("token", { fileId: "doc-1" })).rejects.toBeInstanceOf(PickerGrantRequiredError);
   });
 
-  it("exports markdown text", async () => {
+  it("exports text using the requested mime type", async () => {
     const client = new DriveClient(async () => mockResponse("# Hello"));
-    await expect(client.exportMarkdown("token", "doc-1")).resolves.toBe("# Hello");
+    await expect(client.exportText("token", "doc-1", "text/markdown")).resolves.toBe("# Hello");
   });
 });

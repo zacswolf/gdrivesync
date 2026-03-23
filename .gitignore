@@ -9,3 +9,4 @@ coverage
 .DS_Store
 .gdocsync-dev-session.json
 .gdocsync.json
+data/

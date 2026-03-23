@@ -8,7 +8,7 @@ import { LinkedFileContext, LinkedFileEntry, SyncManifest } from "./types";
 import { fromManifestKey, toManifestKey } from "./utils/paths";
 
 const MANIFEST_FILE_NAME = ".gdocsync.json";
-const defaultManifest = (): SyncManifest => ({ version: 1, files: {} });
+const defaultManifest = (): SyncManifest => ({ version: 2, files: {} });
 
 function sortManifest(manifest: SyncManifest): SyncManifest {
   return {
@@ -85,7 +85,7 @@ export class ManifestStore {
   async updateLinkedFile(fileUri: vscode.Uri, updater: (entry: LinkedFileEntry) => LinkedFileEntry): Promise<LinkedFileContext> {
     const context = await this.getLinkedFile(fileUri);
     if (!context) {
-      throw new Error("This file is not linked to a Google Doc.");
+      throw new Error("This file is not linked to Google.");
     }
 
     const manifest = await this.readManifest(context.folderPath);

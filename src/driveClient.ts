@@ -1,4 +1,3 @@
-import { buildGoogleDocUrl } from "./utils/docUrl";
 import { DriveFileMetadata } from "./types";
 
 type FetchLike = typeof fetch;
@@ -15,15 +14,22 @@ export class GoogleApiError extends Error {
 
 export class PickerGrantRequiredError extends GoogleApiError {}
 
+interface FileMetadataRequest {
+  fileId: string;
+  resourceKey?: string;
+  expectedMimeType?: string;
+  sourceTypeLabel?: string;
+}
+
 export class DriveClient {
   constructor(private readonly fetchImpl: FetchLike = fetch) {}
 
-  async getFileMetadata(accessToken: string, docId: string, resourceKey?: string): Promise<DriveFileMetadata> {
-    const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(docId)}`);
+  async getFileMetadata(accessToken: string, request: FileMetadataRequest): Promise<DriveFileMetadata> {
+    const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.fileId)}`);
     url.searchParams.set("fields", "id,name,mimeType,version,modifiedTime,resourceKey,webViewLink");
     url.searchParams.set("supportsAllDrives", "true");
-    if (resourceKey) {
-      url.searchParams.set("resourceKey", resourceKey);
+    if (request.resourceKey) {
+      url.searchParams.set("resourceKey", request.resourceKey);
     }
 
     const response = await this.fetchImpl(url, {
@@ -33,21 +39,20 @@ export class DriveClient {
     });
 
     if (!response.ok) {
-      await this.throwDriveError(response, docId);
+      await this.throwDriveError(response, request.fileId);
     }
 
     const payload = (await response.json()) as DriveFileMetadata;
-    if (payload.mimeType !== "application/vnd.google-apps.document") {
-      throw new GoogleApiError("The selected file is not a Google Doc.", 400, payload.mimeType);
+    if (request.expectedMimeType && payload.mimeType !== request.expectedMimeType) {
+      throw new GoogleApiError(`The selected file is not a ${request.sourceTypeLabel || "supported Google file"}.`, 400, payload.mimeType);
     }
 
-    payload.webViewLink = payload.webViewLink || buildGoogleDocUrl(payload.id);
     return payload;
   }
 
-  async exportMarkdown(accessToken: string, docId: string, resourceKey?: string): Promise<string> {
-    const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(docId)}/export`);
-    url.searchParams.set("mimeType", "text/markdown");
+  async exportText(accessToken: string, fileId: string, exportMimeType: string, resourceKey?: string): Promise<string> {
+    const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export`);
+    url.searchParams.set("mimeType", exportMimeType);
     if (resourceKey) {
       url.searchParams.set("resourceKey", resourceKey);
     }
@@ -59,17 +64,17 @@ export class DriveClient {
     });
 
     if (!response.ok) {
-      await this.throwDriveError(response, docId);
+      await this.throwDriveError(response, fileId);
     }
 
     return response.text();
   }
 
-  private async throwDriveError(response: Response, docId: string): Promise<never> {
+  private async throwDriveError(response: Response, fileId: string): Promise<never> {
     const details = await response.text();
     if (response.status === 403 || response.status === 404) {
       throw new PickerGrantRequiredError(
-        `The current Google session cannot access Doc ${docId}. Open the Doc through Google Picker to grant access.`,
+        `The current Google session cannot access Google file ${fileId}. Open it through Google Picker to grant access.`,
         response.status,
         details
       );

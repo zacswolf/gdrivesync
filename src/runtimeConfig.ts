@@ -1,10 +1,70 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import * as vscode from "vscode";
 
 import { GoogleReleaseConfig } from "./types";
 
 const DEFAULT_HOSTED_BASE_URL = "https://gdrivesync.zacswolf.com";
 const DEFAULT_SCOPE = "https://www.googleapis.com/auth/drive.file";
-const PLACEHOLDER_CLIENT_ID = "532481685126-bjdbo5o6924bh41314la7s6ph4n02s62.apps.googleusercontent.com";
+const DEFAULT_DESKTOP_CLIENT_ID = "532481685126-bjdbo5o6924bh41314la7s6ph4n02s62.apps.googleusercontent.com";
+
+function parseDotEnvValue(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
+}
+
+function parseDotEnvFile(contents: string): Record<string, string> {
+  const values: Record<string, string> = {};
+
+  for (const rawLine of contents.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const match = rawLine.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (!match) {
+      continue;
+    }
+
+    const [, key, rawValue] = match;
+    values[key] = parseDotEnvValue(rawValue);
+  }
+
+  return values;
+}
+
+async function loadDotEnvFile(filePath: string, loadedKeys: Set<string>): Promise<void> {
+  try {
+    const contents = await readFile(filePath, "utf8");
+    const parsed = parseDotEnvFile(contents);
+
+    for (const [key, value] of Object.entries(parsed)) {
+      if (process.env[key] === undefined || loadedKeys.has(key)) {
+        process.env[key] = value;
+        loadedKeys.add(key);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+export async function loadDevelopmentEnv(basePath: string): Promise<void> {
+  const loadedKeys = new Set<string>();
+  await loadDotEnvFile(path.join(basePath, ".env"), loadedKeys);
+  await loadDotEnvFile(path.join(basePath, ".env.local"), loadedKeys);
+}
 
 function normalizeBaseUrl(rawValue: string | undefined): string {
   const candidate = rawValue?.trim() || DEFAULT_HOSTED_BASE_URL;
@@ -15,10 +75,15 @@ function normalizeBaseUrl(rawValue: string | undefined): string {
   return url.toString().replace(/\/$/, "");
 }
 
-function buildConfig(desktopClientId: string, hostedBaseUrlOverride?: string): GoogleReleaseConfig {
+function buildConfig(
+  desktopClientId: string,
+  hostedBaseUrlOverride?: string,
+  desktopClientSecret?: string
+): GoogleReleaseConfig {
   const hostedBaseUrl = normalizeBaseUrl(hostedBaseUrlOverride);
   return {
-    desktopClientId: desktopClientId.trim() || PLACEHOLDER_CLIENT_ID,
+    desktopClientId: desktopClientId.trim() || DEFAULT_DESKTOP_CLIENT_ID,
+    desktopClientSecret: desktopClientSecret?.trim() || undefined,
     hostedBaseUrl,
     oauthBridgeUrl: `${hostedBaseUrl}/oauth/google/bridge`,
     pickerUrl: `${hostedBaseUrl}/picker`,
@@ -31,23 +96,27 @@ export function resolveExtensionGoogleConfig(): GoogleReleaseConfig {
   const desktopClientId =
     config.get<string>("development.desktopClientId") ||
     process.env.GDOCSYNC_DESKTOP_CLIENT_ID ||
-    PLACEHOLDER_CLIENT_ID;
+    DEFAULT_DESKTOP_CLIENT_ID;
+  const desktopClientSecret =
+    config.get<string>("development.desktopClientSecret") || process.env.GDOCSYNC_DESKTOP_CLIENT_SECRET;
   const hostedBaseUrl =
     config.get<string>("development.hostedBaseUrl") ||
     process.env.GDOCSYNC_HOSTED_BASE_URL ||
     DEFAULT_HOSTED_BASE_URL;
 
-  return buildConfig(desktopClientId, hostedBaseUrl);
+  return buildConfig(desktopClientId, hostedBaseUrl, desktopClientSecret);
 }
 
 export function resolveCliGoogleConfig(env: NodeJS.ProcessEnv = process.env): GoogleReleaseConfig {
-  return buildConfig(env.GDOCSYNC_DESKTOP_CLIENT_ID || PLACEHOLDER_CLIENT_ID, env.GDOCSYNC_HOSTED_BASE_URL);
+  return buildConfig(
+    env.GDOCSYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID,
+    env.GDOCSYNC_HOSTED_BASE_URL,
+    env.GDOCSYNC_DESKTOP_CLIENT_SECRET
+  );
 }
 
 export function assertDesktopClientConfigured(config: GoogleReleaseConfig): void {
-  if (!config.desktopClientId || config.desktopClientId === PLACEHOLDER_CLIENT_ID) {
-    throw new Error(
-      "Google desktop OAuth is not configured yet. Set gdocSync.development.desktopClientId for local development, or replace the placeholder release config before publishing."
-    );
+  if (!config.desktopClientId.trim()) {
+    throw new Error("Google desktop OAuth is not configured yet. Set gdocSync.development.desktopClientId.");
   }
 }

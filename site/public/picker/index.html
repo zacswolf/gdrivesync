@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Google Docs Picker</title>
+    <title>Google Picker</title>
     <style>
       :root {
         color-scheme: light;
@@ -72,7 +72,7 @@
   </head>
   <body>
     <main>
-      <h1>Select a Google Doc</h1>
+      <h1 id="heading">Select a Google file</h1>
       <p id="status">Preparing the Google Picker flow…</p>
       <p id="hint" class="note" hidden></p>
       <button id="continue" type="button" hidden>Continue with Google</button>
@@ -88,6 +88,7 @@
 
       function getElements() {
         return {
+          heading: document.getElementById("heading"),
           status: document.getElementById("status"),
           hint: document.getElementById("hint"),
           continueButton: document.getElementById("continue")
@@ -102,6 +103,10 @@
         const { hint } = getElements();
         hint.hidden = !message;
         hint.textContent = message || "";
+      }
+
+      function setHeading(message) {
+        getElements().heading.textContent = message;
       }
 
       function setContinueButtonState({ hidden, disabled, label, onClick }) {
@@ -147,9 +152,10 @@
       function completeSelection(request, selection) {
         const redirectUrl = new URL(request.payload.localRedirect);
         redirectUrl.searchParams.set("state", request.rawRequest);
-        redirectUrl.searchParams.set("docId", selection.docId);
+        redirectUrl.searchParams.set("fileId", selection.fileId);
         redirectUrl.searchParams.set("title", selection.title);
         redirectUrl.searchParams.set("sourceUrl", selection.sourceUrl);
+        redirectUrl.searchParams.set("sourceMimeType", selection.sourceMimeType);
         if (selection.resourceKey) {
           redirectUrl.searchParams.set("resourceKey", selection.resourceKey);
         }
@@ -215,12 +221,12 @@
       }
 
       async function tryHintLookup(request, accessToken) {
-        if (!request.payload.hintDocId) {
+        if (!request.payload.hintFileId) {
           return null;
         }
 
-        setHint(`Trying the pasted Doc first: ${request.payload.hintDocId}`);
-        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.payload.hintDocId)}`);
+        setHint(`Trying the pasted file first: ${request.payload.hintFileId}`);
+        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.payload.hintFileId)}`);
         url.searchParams.set("fields", "id,name,mimeType,webViewLink,resourceKey");
         url.searchParams.set("supportsAllDrives", "true");
         if (request.payload.resourceKey) {
@@ -237,23 +243,25 @@
         }
 
         const payload = await response.json();
-        if (payload.mimeType !== "application/vnd.google-apps.document") {
-          throw new Error("The pasted file is not a Google Doc.");
+        if (payload.mimeType !== request.payload.sourceMimeType) {
+          throw new Error(`The pasted file is not a ${request.payload.sourceTypeLabel}.`);
         }
 
         return {
-          docId: payload.id,
+          fileId: payload.id,
           title: payload.name,
-          sourceUrl: payload.webViewLink || `https://docs.google.com/document/d/${payload.id}/edit`,
+          sourceUrl: payload.webViewLink || "",
+          sourceMimeType: payload.mimeType,
           resourceKey: payload.resourceKey || request.payload.resourceKey
         };
       }
 
       function openPicker(config, request, accessToken) {
-        const docsView = new google.picker.DocsView(google.picker.ViewId.DOCUMENTS)
+        const viewId = google.picker.ViewId[request.payload.pickerViewId] || google.picker.ViewId.DOCUMENTS;
+        const docsView = new google.picker.DocsView(viewId)
           .setIncludeFolders(false)
           .setSelectFolderEnabled(false)
-          .setMimeTypes("application/vnd.google-apps.document");
+          .setMimeTypes(request.payload.pickerMimeTypes);
 
         const picker = new google.picker.PickerBuilder()
           .setDeveloperKey(config.googleApiKey)
@@ -270,9 +278,10 @@
             if (action === google.picker.Action.PICKED) {
               const doc = data.docs[0];
               completeSelection(request, {
-                docId: doc.id,
-                title: doc.name || doc.title || "Google Doc",
-                sourceUrl: doc.url || `https://docs.google.com/document/d/${doc.id}/edit`,
+                fileId: doc.id,
+                title: doc.name || doc.title || request.payload.sourceTypeLabel,
+                sourceUrl: doc.url || "",
+                sourceMimeType: doc.mimeType || request.payload.sourceMimeType,
                 resourceKey: doc.resourceKey
               });
             }
@@ -322,9 +331,10 @@
       async function main() {
         const request = parseRequest();
         const config = validateSiteConfig();
+        setHeading(`Select a ${request.payload.sourceTypeLabel}`);
         setStatus("Waiting for Google libraries…");
         await waitForGoogleIdentity();
-        setStatus("Continue to choose a Google Doc.");
+        setStatus(`Continue to choose a ${request.payload.sourceTypeLabel}.`);
         setContinueButtonState({
           hidden: false,
           disabled: false,
