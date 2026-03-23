@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GDriveSync Privacy Policy</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: Georgia, serif;
+        color: #162018;
+        background: linear-gradient(180deg, #f8f4eb 0%, #f2ede2 100%);
+      }
+
+      main {
+        max-width: 48rem;
+        margin: 0 auto;
+        padding: 4rem 1.5rem 5rem;
+      }
+
+      article {
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid rgba(22, 32, 24, 0.08);
+        border-radius: 24px;
+        padding: 2rem;
+        box-shadow: 0 18px 42px rgba(18, 24, 20, 0.08);
+      }
+
+      h1,
+      h2 {
+        line-height: 1.1;
+      }
+
+      p,
+      li {
+        line-height: 1.7;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <article>
+        <h1>Privacy Policy</h1>
+        <p>
+          GDriveSync for VS Code uses Google account access only to read Google Docs that you explicitly connect
+          to the extension.
+        </p>
+
+        <h2>What data is accessed</h2>
+        <ul>
+          <li>Google account authorization tokens for the connected user</li>
+          <li>Google Drive metadata for the Google Docs the user links</li>
+          <li>Markdown exports for the linked Google Docs</li>
+        </ul>
+
+        <h2>Where data is stored</h2>
+        <ul>
+          <li>OAuth tokens are stored locally in VS Code secret storage</li>
+          <li>Linked file metadata is stored locally in a workspace `.gdocsync.json` file</li>
+          <li>No server-side database is used in v1</li>
+        </ul>
+
+        <h2>What is not collected</h2>
+        <ul>
+          <li>No analytics or telemetry are included in v1</li>
+          <li>No Google Doc contents are stored on the companion website</li>
+          <li>No linked documents are shared with third parties by the extension</li>
+        </ul>
+
+        <h2>Contact</h2>
+        <p>Questions about the extension or this policy can be sent to the maintainer of the extension release.</p>
+      </article>
+    </main>
+  </body>
+</html>

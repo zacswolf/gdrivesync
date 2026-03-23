@@ -1,0 +1,196 @@
+{
+  "name": "gdrivesync-vscode-extension",
+  "displayName": "GDriveSync",
+  "description": "One-way Google Docs to Markdown sync for VS Code.",
+  "version": "0.1.0",
+  "publisher": "zacswolf",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.110.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "google docs",
+    "markdown",
+    "sync",
+    "drive",
+    "docs"
+  ],
+  "main": "./dist/extension.js",
+  "files": [
+    "dist",
+    "site",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:gdocSync.signIn",
+    "onCommand:gdocSync.signOut",
+    "onCommand:gdocSync.linkCurrentFile",
+    "onCommand:gdocSync.importGoogleDoc",
+    "onCommand:gdocSync.syncCurrentFile",
+    "onCommand:gdocSync.syncAll",
+    "onCommand:gdocSync.toggleSyncOnOpen",
+    "onCommand:gdocSync.unlinkCurrentFile"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "gdocSync.signIn",
+        "title": "GDriveSync: Sign In"
+      },
+      {
+        "command": "gdocSync.signOut",
+        "title": "GDriveSync: Sign Out"
+      },
+      {
+        "command": "gdocSync.linkCurrentFile",
+        "title": "GDriveSync: Link Current Markdown File"
+      },
+      {
+        "command": "gdocSync.importGoogleDoc",
+        "title": "GDriveSync: Import Google Doc as New Markdown File"
+      },
+      {
+        "command": "gdocSync.syncCurrentFile",
+        "title": "GDriveSync: Sync Current File"
+      },
+      {
+        "command": "gdocSync.syncAll",
+        "title": "GDriveSync: Sync All Linked Files"
+      },
+      {
+        "command": "gdocSync.toggleSyncOnOpen",
+        "title": "GDriveSync: Toggle Sync on Open"
+      },
+      {
+        "command": "gdocSync.unlinkCurrentFile",
+        "title": "GDriveSync: Unlink Current File"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "gdocSync.syncCurrentFile",
+          "group": "navigation@100",
+          "when": "resourceLangId == markdown && isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.linkCurrentFile",
+          "group": "navigation@101",
+          "when": "resourceLangId == markdown && isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.toggleSyncOnOpen",
+          "group": "navigation@102",
+          "when": "resourceLangId == markdown && isWorkspaceTrusted"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "gdocSync.linkCurrentFile",
+          "group": "navigation@100",
+          "when": "resourceExtname == .md && isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.syncCurrentFile",
+          "group": "navigation@101",
+          "when": "resourceExtname == .md && isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.toggleSyncOnOpen",
+          "group": "navigation@102",
+          "when": "resourceExtname == .md && isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.unlinkCurrentFile",
+          "group": "navigation@103",
+          "when": "resourceExtname == .md && isWorkspaceTrusted"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gdocSync.signIn",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.signOut",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.linkCurrentFile",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.importGoogleDoc",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.syncCurrentFile",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.syncAll",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.toggleSyncOnOpen",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "command": "gdocSync.unlinkCurrentFile",
+          "when": "isWorkspaceTrusted"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GDriveSync",
+      "properties": {
+        "gdocSync.syncOnOpenDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether newly linked files should sync automatically when opened."
+        },
+        "gdocSync.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a status bar item for the active linked Markdown file."
+        },
+        "gdocSync.development.desktopClientId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional override for the Google desktop OAuth client ID while developing locally."
+        },
+        "gdocSync.development.hostedBaseUrl": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Optional override for the hosted site origin used for the OAuth bridge and Google Picker during development."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "npm run test:unit && npm run test:extension",
+    "test:unit": "vitest run",
+    "pretest:extension": "npm run compile",
+    "test:extension": "node ./dist/test/runTest.js",
+    "cli": "tsx src/cli.ts"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^25.5.0",
+    "@types/vscode": "^1.110.0",
+    "@vscode/test-electron": "^2.5.2",
+    "mocha": "^11.7.5",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.1"
+  }
+}

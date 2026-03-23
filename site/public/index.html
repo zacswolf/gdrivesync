@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GDriveSync for VS Code</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #18231b;
+        --muted: #5e6c60;
+        --paper: #f4f1e8;
+        --card: rgba(255, 255, 255, 0.82);
+        --accent: #23603a;
+        --accent-2: #d6efe0;
+        --edge: rgba(24, 35, 27, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Iowan Old Style", "Palatino Linotype", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top, rgba(35, 96, 58, 0.18), transparent 38%),
+          linear-gradient(160deg, #f9f6ee 0%, var(--paper) 55%, #ebe6d9 100%);
+      }
+
+      main {
+        max-width: 72rem;
+        margin: 0 auto;
+        padding: 4rem 1.5rem 5rem;
+      }
+
+      .hero {
+        display: grid;
+        gap: 1.5rem;
+        padding: 2rem 0 3rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2.6rem, 8vw, 5.8rem);
+        line-height: 0.96;
+        letter-spacing: -0.04em;
+        max-width: 10ch;
+      }
+
+      .lede {
+        max-width: 34rem;
+        color: var(--muted);
+        font-size: 1.15rem;
+        line-height: 1.65;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+        gap: 1rem;
+      }
+
+      .card {
+        padding: 1.3rem;
+        background: var(--card);
+        border: 1px solid var(--edge);
+        border-radius: 20px;
+        backdrop-filter: blur(18px);
+        box-shadow: 0 20px 45px rgba(28, 39, 30, 0.08);
+      }
+
+      .card h2 {
+        margin-top: 0;
+        font-size: 1.25rem;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.45rem 0.8rem;
+        border-radius: 999px;
+        background: var(--accent-2);
+        color: var(--accent);
+        font-size: 0.9rem;
+        letter-spacing: 0.01em;
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      footer {
+        margin-top: 3rem;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="pill">VS Code extension companion site</span>
+      <section class="hero">
+        <h1>Google Docs to Markdown, with a real sync button.</h1>
+        <p class="lede">
+          GDriveSync links a Google Doc to a normal Markdown file in VS Code, then pulls fresh Markdown on demand
+          or when the file opens. The extension is one-way by design: Google Docs stays the source of truth.
+        </p>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Why this site exists</h2>
+          <p>
+            The extension uses this domain for its public homepage, privacy policy, Google OAuth bridge, and hosted
+            Google Picker flow.
+          </p>
+        </article>
+        <article class="card">
+          <h2>What the extension stores</h2>
+          <p>
+            OAuth tokens stay in VS Code secret storage. File mappings and sync metadata live in a workspace-side
+            <code>.gdocsync.json</code> manifest.
+          </p>
+        </article>
+        <article class="card">
+          <h2>Privacy</h2>
+          <p>
+            The extension only uses Google Drive access to read Google Docs you explicitly link. Read the full policy
+            on the <a href="/privacy">privacy page</a>.
+          </p>
+        </article>
+      </section>
+
+      <footer>
+        <p>GDriveSync for VS Code</p>
+      </footer>
+    </main>
+  </body>
+</html>

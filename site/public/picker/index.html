@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Google Docs Picker</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        font-family: "Avenir Next", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top right, rgba(35, 96, 58, 0.2), transparent 30%),
+          linear-gradient(160deg, #f8f4ec 0%, #eef4ef 100%);
+        color: #18221a;
+      }
+
+      main {
+        width: min(94vw, 36rem);
+        padding: 2rem;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.9);
+        box-shadow: 0 24px 56px rgba(14, 24, 16, 0.08);
+      }
+
+      h1 {
+        margin-top: 0;
+      }
+
+      p {
+        line-height: 1.6;
+      }
+
+      code {
+        word-break: break-word;
+      }
+
+      .note {
+        padding: 0.85rem 1rem;
+        border-radius: 14px;
+        background: #eef5ef;
+        color: #245439;
+      }
+    </style>
+    <script src="/site-config.js"></script>
+    <script async defer src="https://accounts.google.com/gsi/client"></script>
+    <script async defer src="https://apis.google.com/js/api.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Select a Google Doc</h1>
+      <p id="status">Preparing the Google Picker flow…</p>
+      <p id="hint" class="note" hidden></p>
+    </main>
+    <script>
+      const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+
+      function decodeBase64UrlJson(value) {
+        const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+        const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+        return JSON.parse(atob(padded));
+      }
+
+      function getElements() {
+        return {
+          status: document.getElementById("status"),
+          hint: document.getElementById("hint")
+        };
+      }
+
+      function setStatus(message) {
+        getElements().status.textContent = message;
+      }
+
+      function setHint(message) {
+        const { hint } = getElements();
+        hint.hidden = !message;
+        hint.textContent = message || "";
+      }
+
+      function parseRequest() {
+        const hashParams = new URLSearchParams(window.location.hash.slice(1));
+        const rawRequest = hashParams.get("request");
+        if (!rawRequest) {
+          throw new Error("Missing picker request payload.");
+        }
+
+        return {
+          rawRequest,
+          payload: decodeBase64UrlJson(rawRequest)
+        };
+      }
+
+      function validateSiteConfig() {
+        const config = window.GDOCSYNC_SITE_CONFIG || {};
+        const missingValues = [];
+        if (!config.googleWebClientId || config.googleWebClientId.includes("REPLACE_")) {
+          missingValues.push("googleWebClientId");
+        }
+        if (!config.googleApiKey || config.googleApiKey.includes("REPLACE_")) {
+          missingValues.push("googleApiKey");
+        }
+        if (!config.googleProjectNumber || String(config.googleProjectNumber).includes("REPLACE_")) {
+          missingValues.push("googleProjectNumber");
+        }
+        if (missingValues.length > 0) {
+          throw new Error(`Hosted picker is not configured yet. Missing: ${missingValues.join(", ")}`);
+        }
+
+        return config;
+      }
+
+      function completeSelection(request, selection) {
+        const redirectUrl = new URL(request.payload.localRedirect);
+        redirectUrl.searchParams.set("state", request.rawRequest);
+        redirectUrl.searchParams.set("docId", selection.docId);
+        redirectUrl.searchParams.set("title", selection.title);
+        redirectUrl.searchParams.set("sourceUrl", selection.sourceUrl);
+        if (selection.resourceKey) {
+          redirectUrl.searchParams.set("resourceKey", selection.resourceKey);
+        }
+        window.location.replace(redirectUrl.toString());
+      }
+
+      function cancelSelection(request) {
+        const redirectUrl = new URL(request.payload.localRedirect);
+        redirectUrl.searchParams.set("state", request.rawRequest);
+        redirectUrl.searchParams.set("cancelled", "1");
+        window.location.replace(redirectUrl.toString());
+      }
+
+      function failSelection(request, error) {
+        const redirectUrl = new URL(request.payload.localRedirect);
+        redirectUrl.searchParams.set("state", request.rawRequest);
+        redirectUrl.searchParams.set("error", error.message || String(error));
+        window.location.replace(redirectUrl.toString());
+      }
+
+      function requestGoogleToken(googleWebClientId) {
+        return new Promise((resolve, reject) => {
+          const tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: googleWebClientId,
+            scope: DRIVE_FILE_SCOPE,
+            prompt: "consent",
+            callback: (response) => {
+              if (response.error) {
+                reject(new Error(response.error));
+                return;
+              }
+              resolve(response);
+            },
+            error_callback: (error) => reject(new Error(error.type || "Google token request failed"))
+          });
+          tokenClient.requestAccessToken();
+        });
+      }
+
+      function loadPickerApi() {
+        return new Promise((resolve) => {
+          window.gapi.load("picker", resolve);
+        });
+      }
+
+      async function tryHintLookup(request, accessToken) {
+        if (!request.payload.hintDocId) {
+          return null;
+        }
+
+        setHint(`Trying the pasted Doc first: ${request.payload.hintDocId}`);
+        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.payload.hintDocId)}`);
+        url.searchParams.set("fields", "id,name,mimeType,webViewLink,resourceKey");
+        url.searchParams.set("supportsAllDrives", "true");
+        if (request.payload.resourceKey) {
+          url.searchParams.set("resourceKey", request.payload.resourceKey);
+        }
+
+        const response = await fetch(url.toString(), {
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+        if (!response.ok) {
+          return null;
+        }
+
+        const payload = await response.json();
+        if (payload.mimeType !== "application/vnd.google-apps.document") {
+          throw new Error("The pasted file is not a Google Doc.");
+        }
+
+        return {
+          docId: payload.id,
+          title: payload.name,
+          sourceUrl: payload.webViewLink || `https://docs.google.com/document/d/${payload.id}/edit`,
+          resourceKey: payload.resourceKey || request.payload.resourceKey
+        };
+      }
+
+      function openPicker(config, request, accessToken) {
+        const docsView = new google.picker.DocsView(google.picker.ViewId.DOCUMENTS)
+          .setIncludeFolders(false)
+          .setSelectFolderEnabled(false)
+          .setMimeTypes("application/vnd.google-apps.document");
+
+        const picker = new google.picker.PickerBuilder()
+          .setDeveloperKey(config.googleApiKey)
+          .setAppId(String(config.googleProjectNumber))
+          .setOAuthToken(accessToken)
+          .addView(docsView)
+          .setCallback((data) => {
+            const action = data.action;
+            if (action === google.picker.Action.CANCEL) {
+              cancelSelection(request);
+              return;
+            }
+
+            if (action === google.picker.Action.PICKED) {
+              const doc = data.docs[0];
+              completeSelection(request, {
+                docId: doc.id,
+                title: doc.name || doc.title || "Google Doc",
+                sourceUrl: doc.url || `https://docs.google.com/document/d/${doc.id}/edit`,
+                resourceKey: doc.resourceKey
+              });
+            }
+          })
+          .build();
+
+        picker.setVisible(true);
+      }
+
+      async function main() {
+        const request = parseRequest();
+        const config = validateSiteConfig();
+        setStatus("Requesting Google access…");
+        const tokenResponse = await requestGoogleToken(config.googleWebClientId);
+        const accessToken = tokenResponse.access_token;
+
+        const hintedSelection = await tryHintLookup(request, accessToken);
+        if (hintedSelection) {
+          completeSelection(request, hintedSelection);
+          return;
+        }
+
+        setHint("");
+        setStatus("Opening Google Picker…");
+        await loadPickerApi();
+        openPicker(config, request, accessToken);
+      }
+
+      window.addEventListener("load", () => {
+        main().catch((error) => {
+          console.error(error);
+          setStatus(error.message || "Google Picker failed.");
+          try {
+            const request = parseRequest();
+            failSelection(request, error);
+          } catch (nestedError) {
+            console.error(nestedError);
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

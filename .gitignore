@@ -1,0 +1,11 @@
+dist
+node_modules
+.vscode-test
+.wrangler
+.env
+.env.*
+coverage
+*.log
+.DS_Store
+.gdocsync-dev-session.json
+.gdocsync.json
