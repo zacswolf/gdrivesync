@@ -20,6 +20,7 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
     const idParam = url.searchParams.get("id");
     const match =
       url.pathname.match(/\/document\/d\/([a-zA-Z0-9_-]+)/) ||
+      url.pathname.match(/\/presentation\/d\/([a-zA-Z0-9_-]+)/) ||
       url.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/) ||
       url.pathname.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) ||
       (idParam ? [idParam, idParam] : null);
@@ -33,6 +34,8 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
       fileId,
       sourceUrl: url.pathname.includes("/document/")
         ? buildGoogleDocUrl(fileId)
+        : url.pathname.includes("/presentation/")
+          ? buildGoogleSlidesUrl(fileId)
         : url.pathname.includes("/spreadsheets/")
           ? buildGoogleSheetUrl(fileId)
           : buildGoogleDriveFileUrl(fileId),
@@ -49,6 +52,10 @@ export function buildGoogleDocUrl(fileId: string): string {
 
 export function buildGoogleSheetUrl(fileId: string): string {
   return `https://docs.google.com/spreadsheets/d/${fileId}/edit`;
+}
+
+export function buildGoogleSlidesUrl(fileId: string): string {
+  return `https://docs.google.com/presentation/d/${fileId}/edit`;
 }
 
 export function buildGoogleDriveFileUrl(fileId: string): string {

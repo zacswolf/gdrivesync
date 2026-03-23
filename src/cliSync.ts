@@ -6,6 +6,7 @@ import { convertDocxToMarkdown } from "./docxConverter";
 import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
+import { convertPresentationToMarp } from "./presentationConverter";
 import { getSyncProfile, getSyncProfilesForTargetFamily, resolveSyncProfileForMimeType } from "./syncProfiles";
 import {
   GeneratedFilePayload,
@@ -78,7 +79,7 @@ export class CliSyncManager {
     const { parseGoogleDocInput } = await import("./utils/docUrl");
     const parsedInput = parseGoogleDocInput(rawInput);
     if (!parsedInput) {
-      throw new Error("Pass a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or raw file ID.");
+      throw new Error("Pass a Google Docs, Slides, Sheets, Drive, DOCX, PPTX, or XLSX file URL or raw file ID.");
     }
 
     const allowedProfiles = this.getAllowedProfilesForTargetPath(targetPath);
@@ -244,28 +245,43 @@ export class CliSyncManager {
       };
     }
 
-    const markdown = await this.fetchSourceMarkdown(accessToken, selection.fileId, selection.resourceKey, profile);
+    const exportMarkdownPath =
+      options?.targetPath ||
+      `${this.slugifyTitle(metadata.name || selection.title || (profile.localFormat === "marp" ? "presentation" : "document"))}.md`;
+    const markdownResult =
+      profile.localFormat === "marp"
+        ? await convertPresentationToMarp(
+            exportMarkdownPath,
+            await this.fetchPresentationBytes(accessToken, selection.fileId, selection.resourceKey, profile),
+            {
+              assetMode: options?.targetPath ? "external" : "data-uri",
+              title: metadata.name || selection.title
+            }
+          )
+        : extractMarkdownAssets(
+            exportMarkdownPath,
+            await this.fetchSourceMarkdown(accessToken, selection.fileId, selection.resourceKey, profile)
+          );
     if (!options?.targetPath) {
       return {
         outputKind: "file",
         message: `Exported ${metadata.name} to stdout.`,
-        primaryText: markdown,
+        primaryText: markdownResult.markdown,
         writtenPaths: []
       };
     }
 
     const targetPath = options.targetPath;
-    const preparedContent = extractMarkdownAssets(targetPath, markdown);
-    await this.syncGeneratedFiles(targetPath, undefined, preparedContent.assets);
-    await this.writeTextFile(targetPath, preparedContent.markdown);
+    await this.syncGeneratedFiles(targetPath, undefined, markdownResult.assets);
+    await this.writeTextFile(targetPath, markdownResult.markdown);
     return {
       targetPath,
       outputKind: "file",
       message: `Exported ${metadata.name} to ${path.basename(targetPath)}.`,
-      primaryText: preparedContent.markdown,
+      primaryText: markdownResult.markdown,
       writtenPaths: [
         targetPath,
-        ...preparedContent.assets.map((asset) => path.join(path.dirname(targetPath), ...asset.relativePath.split("/")))
+        ...markdownResult.assets.map((asset) => path.join(path.dirname(targetPath), ...asset.relativePath.split("/")))
       ]
     };
   }
@@ -286,7 +302,7 @@ export class CliSyncManager {
     }
 
     const localText = await this.readLocalFileText(baseTargetPath);
-    const needsAssetMigration = localText ? containsEmbeddedImageData(localText) : false;
+    const needsAssetMigration = profile.localFormat === "markdown" && localText ? containsEmbeddedImageData(localText) : false;
     const trackedGeneratedFiles = await this.inspectTrackedGeneratedFiles(baseTargetPath, linkedFile.entry);
     const trackedAssetsNeedRepair = trackedGeneratedFiles.hasMissing || trackedGeneratedFiles.hasModified;
     if (
@@ -309,15 +325,21 @@ export class CliSyncManager {
       };
     }
 
-    const sourceText =
+    const preparedContent =
       linkedFile.entry.lastDriveVersion &&
       metadata.version === linkedFile.entry.lastDriveVersion &&
       localText &&
       needsAssetMigration &&
       !trackedAssetsNeedRepair
-        ? localText
-        : await this.fetchSourceMarkdown(accessToken, linkedFile.entry.fileId, linkedFile.entry.resourceKey, profile);
-    const preparedContent = extractMarkdownAssets(baseTargetPath, sourceText);
+        ? extractMarkdownAssets(baseTargetPath, localText)
+        : await this.prepareMarkdownOutput(
+            baseTargetPath,
+            accessToken,
+            linkedFile.entry.fileId,
+            linkedFile.entry.resourceKey,
+            profile,
+            metadata.name
+          );
     await this.syncGeneratedFiles(baseTargetPath, this.getTrackedGeneratedFilePaths(linkedFile.entry), preparedContent.assets);
     await this.writeTextFile(baseTargetPath, preparedContent.markdown);
     const nextHash = sha256Text(preparedContent.markdown);
@@ -449,6 +471,39 @@ export class CliSyncManager {
     }
 
     return this.driveClient.exportText(accessToken, fileId, profile.exportMimeType, resourceKey);
+  }
+
+  private async prepareMarkdownOutput(
+    markdownFilePath: string,
+    accessToken: string,
+    fileId: string,
+    resourceKey: string | undefined,
+    profile: ReturnType<typeof getSyncProfile>,
+    title: string
+  ) {
+    if (profile.localFormat === "marp") {
+      const presentationBytes = await this.fetchPresentationBytes(accessToken, fileId, resourceKey, profile);
+      return convertPresentationToMarp(markdownFilePath, presentationBytes, {
+        assetMode: "external",
+        title
+      });
+    }
+
+    const sourceText = await this.fetchSourceMarkdown(accessToken, fileId, resourceKey, profile);
+    return extractMarkdownAssets(markdownFilePath, sourceText);
+  }
+
+  private async fetchPresentationBytes(
+    accessToken: string,
+    fileId: string,
+    resourceKey: string | undefined,
+    profile: ReturnType<typeof getSyncProfile>
+  ): Promise<Uint8Array> {
+    if (profile.retrievalMode === "drive-export-pptx") {
+      return this.driveClient.exportFile(accessToken, fileId, profile.exportMimeType, resourceKey);
+    }
+
+    return this.driveClient.downloadFile(accessToken, fileId, resourceKey);
   }
 
   private async fetchWorkbookBytes(

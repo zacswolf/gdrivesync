@@ -78,8 +78,8 @@ function buildSyncAllMessage(summary: { syncedCount: number; skippedCount: numbe
 
 async function promptForGoogleFileInput(): Promise<ParsedDocInput | undefined> {
   const value = await vscode.window.showInputBox({
-    placeHolder: "Paste a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or ID",
-    prompt: "Paste a supported Google Docs, Sheets, or Drive file URL, or a raw file ID."
+    placeHolder: "Paste a Google Docs, Slides, Sheets, Drive, DOCX, PPTX, or XLSX file URL or ID",
+    prompt: "Paste a supported Google Docs, Slides, Sheets, or Drive file URL, or a raw file ID."
   });
   if (!value) {
     return undefined;
@@ -142,12 +142,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   function getPickerOptions(profiles = getSupportedSyncProfiles()) {
     const targetFamilies = [...new Set(profiles.map((profile) => profile.targetFamily))];
+    const pickerViewIds = [...new Set(profiles.map((profile) => profile.pickerViewId))];
     const pickerMimeTypes = [...new Set(profiles.flatMap((profile) => profile.pickerMimeTypes.split(",").map((value) => value.trim())))]
       .filter(Boolean)
       .join(",");
     return {
       sourceTypeLabel: getSelectionSourceLabel(profiles),
-      pickerViewId: targetFamilies.length > 1 ? "DOCS" : profiles[0]?.pickerViewId || "DOCUMENTS",
+      pickerViewId: targetFamilies.length > 1 || pickerViewIds.length > 1 ? "DOCS" : profiles[0]?.pickerViewId || "DOCUMENTS",
       pickerMimeTypes
     };
   }
@@ -273,7 +274,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         },
         {
           label: "Paste Google file URL or ID",
-          detail: "Paste a direct Docs, Sheets, Drive, DOCX, or XLSX file URL, or a raw file ID."
+          detail: "Paste a direct Docs, Slides, Sheets, Drive, DOCX, PPTX, or XLSX file URL, or a raw file ID."
         }
       ],
       {

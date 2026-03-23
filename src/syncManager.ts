@@ -8,6 +8,7 @@ import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
+import { convertPresentationToMarp } from "./presentationConverter";
 import { getSyncProfile, SyncProfile } from "./syncProfiles";
 import {
   GeneratedFilePayload,
@@ -181,7 +182,7 @@ export class SyncManager {
     }
 
     const localText = await this.readLocalFileText(baseTargetUri);
-    const needsAssetMigration = localText ? containsEmbeddedImageData(localText) : false;
+    const needsAssetMigration = profile.localFormat === "markdown" && localText ? containsEmbeddedImageData(localText) : false;
     const trackedGeneratedFiles = await this.inspectTrackedGeneratedFiles(baseTargetUri, linkedFile.entry);
     const trackedAssetsNeedRepair = trackedGeneratedFiles.hasMissing || trackedGeneratedFiles.hasModified;
     if (
@@ -211,15 +212,21 @@ export class SyncManager {
       }
     }
 
-    const sourceText =
+    const preparedContent =
       linkedFile.entry.lastDriveVersion &&
       metadata.version === linkedFile.entry.lastDriveVersion &&
       localText &&
       needsAssetMigration &&
       !trackedAssetsNeedRepair
-        ? localText
-        : await this.fetchSourceMarkdown(accessToken, linkedFile.entry.fileId, linkedFile.entry.resourceKey, profile);
-    const preparedContent = extractMarkdownAssets(baseTargetUri.fsPath, sourceText);
+        ? extractMarkdownAssets(baseTargetUri.fsPath, localText)
+        : await this.prepareMarkdownOutput(
+            baseTargetUri.fsPath,
+            accessToken,
+            linkedFile.entry.fileId,
+            linkedFile.entry.resourceKey,
+            profile,
+            metadata.name
+          );
     await this.syncGeneratedFiles(baseTargetUri, this.getTrackedGeneratedFilePaths(linkedFile.entry), preparedContent.assets);
     await this.writeTextFile(baseTargetUri, preparedContent.markdown);
     const nextHash = sha256Text(preparedContent.markdown);
@@ -420,6 +427,39 @@ export class SyncManager {
     }
 
     return this.driveClient.exportText(accessToken, fileId, profile.exportMimeType, resourceKey);
+  }
+
+  private async prepareMarkdownOutput(
+    markdownFilePath: string,
+    accessToken: string,
+    fileId: string,
+    resourceKey: string | undefined,
+    profile: ReturnType<typeof getSyncProfile>,
+    title: string
+  ) {
+    if (profile.localFormat === "marp") {
+      const presentationBytes = await this.fetchPresentationBytes(accessToken, fileId, resourceKey, profile);
+      return convertPresentationToMarp(markdownFilePath, presentationBytes, {
+        assetMode: "external",
+        title
+      });
+    }
+
+    const sourceText = await this.fetchSourceMarkdown(accessToken, fileId, resourceKey, profile);
+    return extractMarkdownAssets(markdownFilePath, sourceText);
+  }
+
+  private async fetchPresentationBytes(
+    accessToken: string,
+    fileId: string,
+    resourceKey: string | undefined,
+    profile: ReturnType<typeof getSyncProfile>
+  ): Promise<Uint8Array> {
+    if (profile.retrievalMode === "drive-export-pptx") {
+      return this.driveClient.exportFile(accessToken, fileId, profile.exportMimeType, resourceKey);
+    }
+
+    return this.driveClient.downloadFile(accessToken, fileId, resourceKey);
   }
 
   private async fetchWorkbookBytes(

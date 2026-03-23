@@ -2,11 +2,13 @@
 
 GDriveSync is a Google Drive to local-file bridge for humans and agents.
 
-Use it in VS Code when you want linked files that stay native to your workspace. Use the CLI when you want an agent-safe way to inspect and export Google Docs, DOCX, Google Sheets, and XLSX into normal Markdown or CSV outputs.
+Use it in VS Code when you want linked files that stay native to your workspace. Use the CLI when you want an agent-safe way to inspect and export Google Docs, DOCX, Google Slides, PowerPoint, Google Sheets, and XLSX into normal Markdown, Marp-flavored Markdown, or CSV outputs.
 
 Core flows:
 - Google Docs -> `.md`
 - DOCX in Drive -> `.md`
+- Google Slides -> Marp-flavored `.md`
+- PowerPoint in Drive -> Marp-flavored `.md`
 - Google Sheets -> `.csv` or `folder-of-csvs`
 - XLSX in Drive -> `.csv` or `folder-of-csvs`
 
@@ -34,6 +36,8 @@ Agent-friendly qualities:
 - Desktop OAuth uses a localhost loopback callback inside the extension
 - Google Drive export to `text/markdown`
 - DOCX-in-Drive download and local DOCX -> Markdown conversion
+- Google Slides export to `.pptx` and local Marp Markdown generation
+- Drive-hosted `.pptx` download and local Marp Markdown generation
 - Google Sheets export to `.xlsx` and local `.csv` generation
 - Drive-hosted `.xlsx` download and local `.csv` generation
 - Workspace sidecar manifest in `.gdrivesync.json`
@@ -41,7 +45,7 @@ Agent-friendly qualities:
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
 - Agent-friendly CLI entrypoint with auth, inspect, export, link, status, sync, and unlink flows
-- Internal sync profiles so Docs/DOCX can share one Markdown flow and Sheets/XLSX can share one CSV flow
+- Internal sync profiles so Docs/DOCX can share one Markdown flow, Slides/PPTX can share one Marp flow, and Sheets/XLSX can share one CSV flow
 - Automatic spreadsheet shape switching:
   - one visible sheet -> `report.csv`
   - multiple visible sheets -> `report/<sheet>.csv`
@@ -165,6 +169,7 @@ npm run cli -- auth login
 npm run cli -- auth status --json
 npm run cli -- inspect https://docs.google.com/document/d/<file-id>/edit --json
 npm run cli -- export https://docs.google.com/document/d/<file-id>/edit
+npm run cli -- export https://docs.google.com/presentation/d/<file-id>/edit ./deck.md --json
 npm run cli -- export https://docs.google.com/spreadsheets/d/<file-id>/edit ./sheet.csv --json
 npm run cli -- link https://docs.google.com/document/d/<file-id>/edit ./notes/spec.md --cwd ./data --json
 npm run cli -- status --all --cwd ./data --json
@@ -238,9 +243,10 @@ Publishing a short best-practices doc for agent usage is not dumb at all. It is 
 
 ## Current limitations
 
-- One-way sync only: Google files -> local Markdown or CSV
+- One-way sync only: Google files -> local Markdown, Marp Markdown, or CSV
 - The extension now uses `drive.readonly` for one-way sync, so existing local sessions may need a one-time reconnect after upgrades
 - The hosted Picker fallback is still used as a backup if direct pasted-link access fails
-- Formatting fidelity depends on Google’s Markdown export for native Docs, local DOCX conversion for Word files, and local workbook parsing for Sheets/XLSX
+- Formatting fidelity depends on Google’s Markdown export for native Docs, local DOCX conversion for Word files, local presentation parsing for Slides/PPTX, and local workbook parsing for Sheets/XLSX
+- Presentation sync targets Marp-flavored Markdown and focuses on slide text plus extracted images rather than full visual layout fidelity
 - Spreadsheet sync only supports native Google Sheets and `.xlsx` in v1
 - Linked files must live inside an open VS Code workspace folder

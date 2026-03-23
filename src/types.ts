@@ -1,6 +1,8 @@
 export type SyncProfileId =
   | "google-doc-markdown"
   | "word-docx-markdown"
+  | "google-slide-marp"
+  | "powerpoint-pptx-marp"
   | "google-sheet-csv"
   | "excel-xlsx-csv";
 

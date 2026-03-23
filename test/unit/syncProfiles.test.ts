@@ -7,6 +7,8 @@ describe("syncProfiles", () => {
     expect(getSupportedSourceMimeTypes()).toEqual([
       "application/vnd.google-apps.document",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.google-apps.presentation",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
       "application/vnd.google-apps.spreadsheet",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     ]);
@@ -24,6 +26,16 @@ describe("syncProfiles", () => {
 
   it("resolves the Google Sheets profile from mime type", () => {
     expect(resolveSyncProfileForMimeType("application/vnd.google-apps.spreadsheet")?.id).toBe("google-sheet-csv");
+  });
+
+  it("resolves the Google Slides profile from mime type", () => {
+    expect(resolveSyncProfileForMimeType("application/vnd.google-apps.presentation")?.id).toBe("google-slide-marp");
+  });
+
+  it("resolves the PowerPoint profile from mime type", () => {
+    expect(resolveSyncProfileForMimeType("application/vnd.openxmlformats-officedocument.presentationml.presentation")?.id).toBe(
+      "powerpoint-pptx-marp"
+    );
   });
 
   it("resolves the XLSX profile from mime type", () => {

@@ -278,7 +278,7 @@ async function main(): Promise<void> {
     const rawInput = parsed.args[0];
     const parsedInput = rawInput ? parseGoogleDocInput(rawInput) : undefined;
     if (!parsedInput) {
-      throw new Error("Pass a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or raw file ID.");
+      throw new Error("Pass a Google Docs, Slides, Sheets, Drive, DOCX, PPTX, or XLSX file URL or raw file ID.");
     }
 
     const accessToken = await authManager.getAccessToken();
@@ -316,7 +316,7 @@ async function main(): Promise<void> {
 
     const parsedInput = parseGoogleDocInput(rawInput);
     if (!parsedInput) {
-      throw new Error("Pass a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or raw file ID.");
+      throw new Error("Pass a Google Docs, Slides, Sheets, Drive, DOCX, PPTX, or XLSX file URL or raw file ID.");
     }
 
     const accessToken = await authManager.getAccessToken();

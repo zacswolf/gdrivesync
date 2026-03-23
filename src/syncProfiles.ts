@@ -1,9 +1,11 @@
 import { SyncProfileId } from "./types";
-import { buildGoogleDocUrl, buildGoogleDriveFileUrl, buildGoogleSheetUrl } from "./utils/docUrl";
+import { buildGoogleDocUrl, buildGoogleDriveFileUrl, buildGoogleSheetUrl, buildGoogleSlidesUrl } from "./utils/docUrl";
 
 export type SyncRetrievalMode =
   | "drive-export-markdown"
   | "drive-download-docx"
+  | "drive-export-pptx"
+  | "drive-download-pptx"
   | "drive-export-xlsx"
   | "drive-download-xlsx";
 
@@ -24,8 +26,8 @@ export interface SyncProfile {
 
 export const GOOGLE_DOC_MARKDOWN_PROFILE: SyncProfile = {
   id: "google-doc-markdown",
-  label: "Google file to Markdown",
-  sourceTypeLabel: "Google file",
+  label: "Google Docs to Markdown",
+  sourceTypeLabel: "Google document",
   sourceMimeType: "application/vnd.google-apps.document",
   targetFamily: "markdown",
   exportMimeType: "text/markdown",
@@ -49,6 +51,37 @@ export const WORD_DOCX_MARKDOWN_PROFILE: SyncProfile = {
   pickerViewId: "DOCUMENTS",
   pickerMimeTypes: GOOGLE_DOC_MARKDOWN_PROFILE.pickerMimeTypes,
   retrievalMode: "drive-download-docx",
+  buildSourceUrl: buildGoogleDriveFileUrl
+};
+
+export const GOOGLE_SLIDE_MARP_PROFILE: SyncProfile = {
+  id: "google-slide-marp",
+  label: "Google Slides to Marp Markdown",
+  sourceTypeLabel: "Presentation",
+  sourceMimeType: "application/vnd.google-apps.presentation",
+  targetFamily: "markdown",
+  exportMimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  localFormat: "marp",
+  targetFileExtension: "md",
+  pickerViewId: "PRESENTATIONS",
+  pickerMimeTypes:
+    "application/vnd.google-apps.presentation,application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  retrievalMode: "drive-export-pptx",
+  buildSourceUrl: buildGoogleSlidesUrl
+};
+
+export const POWERPOINT_PPTX_MARP_PROFILE: SyncProfile = {
+  id: "powerpoint-pptx-marp",
+  label: "PowerPoint PPTX to Marp Markdown",
+  sourceTypeLabel: "PowerPoint presentation",
+  sourceMimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  targetFamily: "markdown",
+  exportMimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  localFormat: "marp",
+  targetFileExtension: "md",
+  pickerViewId: "PRESENTATIONS",
+  pickerMimeTypes: GOOGLE_SLIDE_MARP_PROFILE.pickerMimeTypes,
+  retrievalMode: "drive-download-pptx",
   buildSourceUrl: buildGoogleDriveFileUrl
 };
 
@@ -86,6 +119,8 @@ export const EXCEL_XLSX_CSV_PROFILE: SyncProfile = {
 const SYNC_PROFILES = {
   "google-doc-markdown": GOOGLE_DOC_MARKDOWN_PROFILE,
   "word-docx-markdown": WORD_DOCX_MARKDOWN_PROFILE,
+  "google-slide-marp": GOOGLE_SLIDE_MARP_PROFILE,
+  "powerpoint-pptx-marp": POWERPOINT_PPTX_MARP_PROFILE,
   "google-sheet-csv": GOOGLE_SHEET_CSV_PROFILE,
   "excel-xlsx-csv": EXCEL_XLSX_CSV_PROFILE
 } satisfies Record<SyncProfileId, SyncProfile>;

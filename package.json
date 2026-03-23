@@ -1,7 +1,7 @@
 {
   "name": "gdrivesync-vscode-extension",
   "displayName": "GDriveSync",
-  "description": "Google Drive to Markdown or CSV sync for VS Code and agent-friendly CLI workflows.",
+  "description": "Google Drive to Markdown, Marp, or CSV sync for VS Code and agent-friendly CLI workflows.",
   "version": "0.1.0",
   "publisher": "zacswolf",
   "license": "MIT",
@@ -15,9 +15,12 @@
   "keywords": [
     "google docs",
     "google sheets",
+    "google slides",
+    "powerpoint",
     "ai agents",
     "cli",
     "markdown",
+    "marp",
     "csv",
     "xlsx",
     "sync",
@@ -219,6 +222,8 @@
   },
   "dependencies": {
     "@types/turndown": "^5.0.6",
+    "fast-xml-parser": "^5.5.9",
+    "jszip": "^3.10.1",
     "mammoth": "^1.12.0",
     "turndown": "^7.2.2",
     "turndown-plugin-gfm": "^1.0.2",

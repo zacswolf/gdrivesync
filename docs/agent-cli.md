@@ -4,7 +4,7 @@ GDriveSync is most useful to agents when it is treated like a stateful bridge be
 
 ## Recommended usage patterns
 
-- Use `gdrivesync inspect ... --json` before deciding whether a file should become Markdown or CSV.
+- Use `gdrivesync inspect ... --json` before deciding whether a file should become Markdown, Marp Markdown, or CSV.
 - Use `gdrivesync export ...` when the agent only needs a transient local read.
 - Use `gdrivesync link ...` when the agent wants durable workspace state that can be refreshed later.
 - Use `gdrivesync status --all --json --cwd <workspace>` to discover linked files before a batch run.
@@ -49,9 +49,16 @@ Export a single file directly to stdout:
 gdrivesync export "https://docs.google.com/document/d/<file-id>/edit"
 ```
 
+Export a Google Slides deck to Marp-flavored Markdown:
+
+```bash
+gdrivesync export "https://docs.google.com/presentation/d/<file-id>/edit" "./deck.md" --json
+```
+
 ## Practical guidance
 
 - Expect Markdown outputs for Docs and DOCX.
+- Expect Marp-flavored Markdown outputs for Google Slides and PowerPoint.
 - Expect CSV or folder-of-CSV outputs for Sheets and XLSX.
 - Treat Google Drive as the source of truth. This project is one-way by design.
 - If an agent wants to preserve local edits, it should inspect sync results and respect cancelled outcomes unless it intentionally reruns with `--force`.
