@@ -11,7 +11,7 @@ One-way Google Drive file sync for VS Code. Link a Google Doc or DOCX file to a 
 - DOCX-in-Drive download and local DOCX -> Markdown conversion
 - Google Sheets export to `.xlsx` and local `.csv` generation
 - Drive-hosted `.xlsx` download and local `.csv` generation
-- Workspace sidecar manifest in `.gdocsync.json`
+- Workspace sidecar manifest in `.gdrivesync.json`
 - Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page

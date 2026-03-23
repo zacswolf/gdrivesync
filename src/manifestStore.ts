@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import * as vscode from "vscode";
@@ -7,7 +7,8 @@ import { normalizeManifest } from "./manifestSchema";
 import { LinkedFileContext, LinkedFileEntry, SyncManifest } from "./types";
 import { fromManifestKey, toManifestKey } from "./utils/paths";
 
-const MANIFEST_FILE_NAME = ".gdocsync.json";
+const MANIFEST_FILE_NAME = ".gdrivesync.json";
+const LEGACY_MANIFEST_FILE_NAME = ".gdocsync.json";
 const defaultManifest = (): SyncManifest => ({ version: 3, files: {} });
 
 function sortManifest(manifest: SyncManifest): SyncManifest {
@@ -46,9 +47,22 @@ export class ManifestStore {
     return path.join(folderPath, MANIFEST_FILE_NAME);
   }
 
+  getLegacyManifestPath(folderPath: string): string {
+    return path.join(folderPath, LEGACY_MANIFEST_FILE_NAME);
+  }
+
   async readManifest(folderPath: string): Promise<SyncManifest> {
     try {
       const rawValue = await readFile(this.getManifestPath(folderPath), "utf8");
+      return normalizeManifest(JSON.parse(rawValue));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    try {
+      const rawValue = await readFile(this.getLegacyManifestPath(folderPath), "utf8");
       return normalizeManifest(JSON.parse(rawValue));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -62,6 +76,7 @@ export class ManifestStore {
   async writeManifest(folderPath: string, manifest: SyncManifest): Promise<void> {
     await mkdir(folderPath, { recursive: true });
     await writeFile(this.getManifestPath(folderPath), `${JSON.stringify(sortManifest(manifest), null, 2)}\n`, "utf8");
+    await rm(this.getLegacyManifestPath(folderPath), { force: true });
   }
 
   async getLinkedFile(fileUri: vscode.Uri): Promise<LinkedFileContext | undefined> {
