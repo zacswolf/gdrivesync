@@ -20,6 +20,7 @@ import {
 import { sha256Bytes, sha256Text } from "./utils/hash";
 import { fromManifestKey } from "./utils/paths";
 import { containsEmbeddedImageData, extractMarkdownAssets } from "./utils/markdownAssets";
+import { buildSpreadsheetSyncSummary } from "./utils/spreadsheetSyncSummary";
 import { parseWorkbookToCsvOutput } from "./workbookCsv";
 
 interface TrackedOutputState {
@@ -275,6 +276,12 @@ export class SyncManager {
 
     const workbookBytes = await this.fetchWorkbookBytes(accessToken, linkedFile.entry.fileId, linkedFile.entry.resourceKey, profile);
     const workbookOutput = parseWorkbookToCsvOutput(baseTargetUri.fsPath, workbookBytes);
+    const syncSummary = buildSpreadsheetSyncSummary({
+      baseTargetPath: baseTargetUri.fsPath,
+      previousOutputKind: linkedFile.entry.outputKind,
+      nextOutputKind: workbookOutput.outputKind,
+      visibleSheetCount: workbookOutput.visibleSheetCount
+    });
 
     if (workbookOutput.outputKind === "file" && workbookOutput.primaryFileText === undefined) {
       throw new Error("Spreadsheet sync did not produce a primary CSV file.");
@@ -315,12 +322,12 @@ export class SyncManager {
     }));
 
     if (options?.reason === "manual" || options?.reason === "link") {
-      void vscode.window.setStatusBarMessage(`Synced ${path.basename(baseTargetUri.fsPath)} from Google`, 4000);
+      void vscode.window.setStatusBarMessage(syncSummary, 5000);
     }
 
     return {
       status: "synced",
-      message: `Synced ${path.basename(baseTargetUri.fsPath)}.`
+      message: syncSummary
     };
   }
 

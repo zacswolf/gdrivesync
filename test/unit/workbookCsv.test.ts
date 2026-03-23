@@ -29,6 +29,7 @@ describe("parseWorkbookToCsvOutput", () => {
     );
 
     expect(output.outputKind).toBe("file");
+    expect(output.visibleSheetCount).toBe(1);
     expect(output.primaryFileText).toContain("Name,Value");
     expect(output.generatedFiles).toEqual([]);
   });
@@ -43,6 +44,7 @@ describe("parseWorkbookToCsvOutput", () => {
     );
 
     expect(output.outputKind).toBe("directory");
+    expect(output.visibleSheetCount).toBe(2);
     expect(output.generatedFiles.map((file) => file.relativePath)).toEqual(["report/summary.csv", "report/pipeline.csv"]);
   });
 
@@ -56,6 +58,7 @@ describe("parseWorkbookToCsvOutput", () => {
     );
 
     expect(output.outputKind).toBe("file");
+    expect(output.visibleSheetCount).toBe(1);
     expect(output.primaryFileText).toContain("Name");
   });
 

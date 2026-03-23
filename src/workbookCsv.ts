@@ -13,6 +13,7 @@ interface WorkbookSheetState {
 
 export interface WorkbookCsvOutput {
   outputKind: SyncOutputKind;
+  visibleSheetCount: number;
   primaryFileText?: string;
   generatedFiles: GeneratedFilePayload[];
 }
@@ -77,6 +78,7 @@ export function parseWorkbookToCsvOutput(baseTargetPath: string, workbookBytes: 
 
     return {
       outputKind: "file",
+      visibleSheetCount: visibleSheetNames.length,
       primaryFileText: XLSX.utils.sheet_to_csv(worksheet),
       generatedFiles: []
     };
@@ -96,6 +98,7 @@ export function parseWorkbookToCsvOutput(baseTargetPath: string, workbookBytes: 
 
   return {
     outputKind: "directory",
+    visibleSheetCount: visibleSheetNames.length,
     generatedFiles
   };
 }
