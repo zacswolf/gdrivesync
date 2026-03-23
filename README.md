@@ -1,6 +1,6 @@
 # GDriveSync for VS Code
 
-One-way Google Drive file to Markdown sync for VS Code. Link a Google Doc or DOCX file in Drive to a normal `.md` file, then sync on demand or when the file opens.
+One-way Google Drive file sync for VS Code. Link a Google Doc or DOCX file to a normal `.md` file, or a Google Sheet or `.xlsx` file to local `.csv` output, then sync on demand or when the file opens.
 
 ## What is implemented
 
@@ -9,12 +9,17 @@ One-way Google Drive file to Markdown sync for VS Code. Link a Google Doc or DOC
 - Desktop OAuth uses a localhost loopback callback inside the extension
 - Google Drive export to `text/markdown`
 - DOCX-in-Drive download and local DOCX -> Markdown conversion
+- Google Sheets export to `.xlsx` and local `.csv` generation
+- Drive-hosted `.xlsx` download and local `.csv` generation
 - Workspace sidecar manifest in `.gdocsync.json`
 - Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
-- Status bar, CodeLens, and editor/explorer command contributions for linked Markdown files
+- Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
 - Thin CLI harness for local auth/export testing
-- Internal sync profiles so Google Docs and DOCX can share one user-facing Markdown sync flow
+- Internal sync profiles so Docs/DOCX can share one Markdown flow and Sheets/XLSX can share one CSV flow
+- Automatic spreadsheet shape switching:
+  - one visible sheet -> `report.csv`
+  - multiple visible sheets -> `report/<sheet>.csv`
 
 ## Project layout
 
@@ -107,11 +112,13 @@ The CLI is for development and debugging, not for end users.
 npm run cli -- sign-in
 npm run cli -- metadata https://docs.google.com/document/d/<file-id>/edit
 npm run cli -- export https://drive.google.com/file/d/<file-id>/view ./file.md
+npm run cli -- export https://docs.google.com/spreadsheets/d/<file-id>/edit ./sheet.csv
 ```
 
 ## Current limitations
 
-- One-way sync only: Google files -> Markdown
+- One-way sync only: Google files -> local Markdown or CSV
 - `drive.file` access means pasted file IDs may still need one Picker-open round trip
-- Formatting fidelity depends on Google’s Markdown export for native Docs and local DOCX conversion for Word files
+- Formatting fidelity depends on Google’s Markdown export for native Docs, local DOCX conversion for Word files, and local workbook parsing for Sheets/XLSX
+- Spreadsheet sync only supports native Google Sheets and `.xlsx` in v1
 - Linked files must live inside an open VS Code workspace folder

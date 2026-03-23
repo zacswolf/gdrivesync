@@ -1,9 +1,9 @@
 import { getDefaultSyncProfile, getSyncProfile, isSyncProfileId } from "./syncProfiles";
-import { GeneratedAssetRecord, SyncManifest } from "./types";
+import { GeneratedFileRecord, SyncManifest, SyncOutputKind } from "./types";
 
 function defaultManifest(): SyncManifest {
   return {
-    version: 2,
+    version: 3,
     files: {}
   };
 }
@@ -21,9 +21,13 @@ function toStringArray(value: unknown): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
-function normalizeGeneratedAssets(value: unknown, fallbackPaths: string[] | undefined): GeneratedAssetRecord[] | undefined {
+function normalizeOutputKind(value: unknown): SyncOutputKind {
+  return value === "directory" ? "directory" : "file";
+}
+
+function normalizeGeneratedFiles(value: unknown, fallbackPaths: string[] | undefined): GeneratedFileRecord[] | undefined {
   if (Array.isArray(value)) {
-    const items: GeneratedAssetRecord[] = [];
+    const items: GeneratedFileRecord[] = [];
     for (const candidate of value) {
       if (!candidate || typeof candidate !== "object") {
         continue;
@@ -59,7 +63,7 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
 
   const candidate = rawValue as { version?: unknown; files?: unknown };
   const manifest: SyncManifest = {
-    version: 2,
+    version: 3,
     files: {}
   };
 
@@ -77,7 +81,7 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
     const profileId = isSyncProfileId(entry.profileId) ? entry.profileId : getDefaultSyncProfile().id;
     const profile = getSyncProfile(profileId);
     const fileId = isString(entry.fileId) ? entry.fileId : isString(entry.docId) ? entry.docId : undefined;
-    const generatedAssetPaths = toStringArray(entry.generatedAssetPaths);
+    const generatedFilePaths = toStringArray(entry.generatedFilePaths) || toStringArray(entry.generatedAssetPaths);
     if (!fileId || !isString(entry.sourceUrl) || !isString(entry.title) || typeof entry.syncOnOpen !== "boolean") {
       continue;
     }
@@ -89,11 +93,12 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
       sourceMimeType: isString(entry.sourceMimeType) ? entry.sourceMimeType : profile.sourceMimeType,
       exportMimeType: isString(entry.exportMimeType) ? entry.exportMimeType : profile.exportMimeType,
       localFormat: isString(entry.localFormat) ? entry.localFormat : profile.localFormat,
+      outputKind: normalizeOutputKind(entry.outputKind),
       title: entry.title,
       syncOnOpen: entry.syncOnOpen,
       resourceKey: isString(entry.resourceKey) ? entry.resourceKey : undefined,
-      generatedAssets: normalizeGeneratedAssets(entry.generatedAssets, generatedAssetPaths),
-      generatedAssetPaths,
+      generatedFiles: normalizeGeneratedFiles(entry.generatedFiles || entry.generatedAssets, generatedFilePaths),
+      generatedFilePaths,
       lastSyncedAt: isString(entry.lastSyncedAt) ? entry.lastSyncedAt : undefined,
       lastDriveVersion: isString(entry.lastDriveVersion) ? entry.lastDriveVersion : undefined,
       lastLocalHash: isString(entry.lastLocalHash) ? entry.lastLocalHash : undefined

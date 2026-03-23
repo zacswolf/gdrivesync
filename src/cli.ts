@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
 
 import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
@@ -8,6 +9,7 @@ import { getSupportedSourceMimeTypes, resolveSyncProfileForMimeType } from "./sy
 import { FileTokenStore } from "./tokenStores";
 import { parseGoogleDocInput } from "./utils/docUrl";
 import { convertDocxToMarkdown } from "./docxConverter";
+import { parseWorkbookToCsvOutput } from "./workbookCsv";
 
 function printUsage(): void {
   process.stdout.write(`Usage:
@@ -48,7 +50,7 @@ async function main(): Promise<void> {
   const rawInput = args[0];
   const parsedInput = rawInput ? parseGoogleDocInput(rawInput) : undefined;
   if (!parsedInput) {
-    throw new Error("Pass a Google Docs, Drive, or DOCX file URL or raw file ID.");
+    throw new Error("Pass a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or raw file ID.");
   }
 
   const accessToken = await authManager.getAccessToken();
@@ -69,13 +71,43 @@ async function main(): Promise<void> {
   }
 
   if (command === "export") {
+    const outputPath = args[1];
+    if (syncProfile.targetFamily === "csv") {
+      const workbookBytes =
+        syncProfile.retrievalMode === "drive-export-xlsx"
+          ? await driveClient.exportFile(accessToken, parsedInput.fileId, syncProfile.exportMimeType, parsedInput.resourceKey)
+          : await driveClient.downloadFile(accessToken, parsedInput.fileId, parsedInput.resourceKey);
+      const workbookOutput = parseWorkbookToCsvOutput(outputPath || `${metadata.name}.csv`, workbookBytes);
+      if (!outputPath) {
+        if (workbookOutput.outputKind === "directory") {
+          throw new Error("Pass an output path when exporting a spreadsheet with multiple visible worksheets.");
+        }
+
+        process.stdout.write(workbookOutput.primaryFileText || "");
+        return;
+      }
+
+      if (workbookOutput.outputKind === "file") {
+        await writeFile(outputPath, workbookOutput.primaryFileText || "", "utf8");
+        process.stdout.write(`Wrote ${outputPath}\n`);
+        return;
+      }
+
+      const outputDirectory = path.dirname(outputPath);
+      for (const generatedFile of workbookOutput.generatedFiles) {
+        const absolutePath = path.join(outputDirectory, ...generatedFile.relativePath.split("/"));
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, Buffer.from(generatedFile.bytes));
+      }
+      process.stdout.write(`Wrote ${path.join(outputDirectory, path.parse(outputPath).name)}\n`);
+      return;
+    }
+
     const markdown =
       syncProfile.retrievalMode === "drive-download-docx"
         ? await convertDocxToMarkdown(await driveClient.downloadFile(accessToken, parsedInput.fileId, parsedInput.resourceKey))
         : await driveClient.exportText(accessToken, parsedInput.fileId, syncProfile.exportMimeType, parsedInput.resourceKey);
-    const outputPath = args[1];
     if (outputPath) {
-      const { writeFile } = await import("node:fs/promises");
       await writeFile(outputPath, markdown, "utf8");
       process.stdout.write(`Wrote ${outputPath}\n`);
       return;

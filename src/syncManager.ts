@@ -8,10 +8,24 @@ import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
-import { getSyncProfile } from "./syncProfiles";
-import { GeneratedAssetRecord, GeneratedMarkdownAsset, LinkedFileEntry, PickerSelection, SyncOutcome } from "./types";
+import { getSyncProfile, SyncProfile } from "./syncProfiles";
+import {
+  GeneratedFilePayload,
+  GeneratedFileRecord,
+  LinkedFileContext,
+  LinkedFileEntry,
+  PickerSelection,
+  SyncOutcome
+} from "./types";
 import { sha256Bytes, sha256Text } from "./utils/hash";
+import { fromManifestKey } from "./utils/paths";
 import { containsEmbeddedImageData, extractMarkdownAssets } from "./utils/markdownAssets";
+import { parseWorkbookToCsvOutput } from "./workbookCsv";
+
+interface TrackedOutputState {
+  hasMissing: boolean;
+  hasModified: boolean;
+}
 
 export class SyncManager {
   private readonly inFlightSyncs = new Map<string, Promise<SyncOutcome>>();
@@ -33,11 +47,12 @@ export class SyncManager {
       sourceMimeType: selection.sourceMimeType || profile.sourceMimeType,
       exportMimeType: profile.exportMimeType,
       localFormat: profile.localFormat,
+      outputKind: "file",
       resourceKey: selection.resourceKey,
       title: selection.title,
       syncOnOpen,
-      generatedAssets: undefined,
-      generatedAssetPaths: undefined,
+      generatedFiles: undefined,
+      generatedFilePaths: undefined,
       lastDriveVersion: undefined,
       lastLocalHash: undefined,
       lastSyncedAt: undefined
@@ -53,27 +68,36 @@ export class SyncManager {
     return context.entry.syncOnOpen;
   }
 
-  async unlinkFile(fileUri: vscode.Uri, options?: { removeGeneratedAssets?: boolean }): Promise<boolean> {
+  async unlinkFile(fileUri: vscode.Uri, options?: { removeGeneratedFiles?: boolean }): Promise<boolean> {
     const context = await this.manifestStore.getLinkedFile(fileUri);
     if (!context) {
       return false;
     }
 
-    if (options?.removeGeneratedAssets) {
-      await this.syncGeneratedAssets(fileUri, this.getTrackedAssetPaths(context.entry), []);
+    const baseTargetUri = this.getBaseTargetUri(context);
+    if (options?.removeGeneratedFiles) {
+      await this.syncGeneratedFiles(baseTargetUri, this.getTrackedGeneratedFilePaths(context.entry), []);
+      if (context.entry.outputKind === "file" && context.matchedOutputKind === "primary") {
+        await this.deletePrimaryFile(baseTargetUri);
+      }
     }
 
     return this.manifestStore.unlinkFile(fileUri);
   }
 
   async syncFile(fileUri: vscode.Uri, options?: { reason?: "manual" | "open" | "link" }): Promise<SyncOutcome> {
-    const syncKey = fileUri.toString();
+    const linkedFile = await this.manifestStore.getLinkedFile(fileUri);
+    if (!linkedFile) {
+      throw new Error("This file is not linked to a Google source yet.");
+    }
+
+    const syncKey = `${linkedFile.folderPath}:${linkedFile.key}`;
     const activeSync = this.inFlightSyncs.get(syncKey);
     if (activeSync) {
       return activeSync;
     }
 
-    const syncTask = this.doSyncFile(fileUri, options).finally(() => {
+    const syncTask = this.doSyncFile(linkedFile, options).finally(() => {
       this.inFlightSyncs.delete(syncKey);
     });
     this.inFlightSyncs.set(syncKey, syncTask);
@@ -126,23 +150,28 @@ export class SyncManager {
     this.openDebounce.set(key, handle);
   }
 
-  private async doSyncFile(fileUri: vscode.Uri, options?: { reason?: "manual" | "open" | "link" }): Promise<SyncOutcome> {
-    const linkedFile = await this.manifestStore.getLinkedFile(fileUri);
-    if (!linkedFile) {
-      throw new Error("This file is not linked to a Google source yet.");
-    }
-
+  private async doSyncFile(
+    linkedFile: LinkedFileContext,
+    options?: { reason?: "manual" | "open" | "link" }
+  ): Promise<SyncOutcome> {
     const profile = getSyncProfile(linkedFile.entry.profileId);
     const accessToken = await this.authManager.getAccessToken();
+    const baseTargetUri = this.getBaseTargetUri(linkedFile);
     const metadata = await this.driveClient.getFileMetadata(accessToken, {
       fileId: linkedFile.entry.fileId,
       resourceKey: linkedFile.entry.resourceKey,
       expectedMimeTypes: [linkedFile.entry.sourceMimeType],
       sourceTypeLabel: profile.sourceTypeLabel
     });
-    const localText = await this.readLocalFileText(fileUri);
+
+    if (profile.targetFamily === "csv") {
+      return this.doSpreadsheetSync(baseTargetUri, linkedFile, profile, metadata, accessToken, options);
+    }
+
+    const localText = await this.readLocalFileText(baseTargetUri);
     const needsAssetMigration = localText ? containsEmbeddedImageData(localText) : false;
-    const trackedAssetsNeedRepair = await this.generatedAssetsNeedRepair(fileUri, linkedFile.entry);
+    const trackedGeneratedFiles = await this.inspectTrackedGeneratedFiles(baseTargetUri, linkedFile.entry);
+    const trackedAssetsNeedRepair = trackedGeneratedFiles.hasMissing || trackedGeneratedFiles.hasModified;
     if (
       linkedFile.entry.lastDriveVersion &&
       metadata.version === linkedFile.entry.lastDriveVersion &&
@@ -155,10 +184,10 @@ export class SyncManager {
       };
     }
 
-    const localState = await this.readLocalFileState(fileUri, localText);
+    const localState = await this.readLocalFileState(baseTargetUri, localText);
     if (needsOverwriteConfirmation(localState, linkedFile.entry.lastLocalHash)) {
       const selection = await vscode.window.showWarningMessage(
-        `${path.basename(fileUri.fsPath)} has local changes. Replace it with the latest Google content?`,
+        `${path.basename(baseTargetUri.fsPath)} has local changes. Replace it with the latest Google content?`,
         { modal: true },
         "Overwrite"
       );
@@ -178,33 +207,120 @@ export class SyncManager {
       !trackedAssetsNeedRepair
         ? localText
         : await this.fetchSourceMarkdown(accessToken, linkedFile.entry.fileId, linkedFile.entry.resourceKey, profile);
-    const preparedContent = extractMarkdownAssets(fileUri.fsPath, sourceText);
-    await this.syncGeneratedAssets(fileUri, this.getTrackedAssetPaths(linkedFile.entry), preparedContent.assets);
-    await this.writeTextFile(fileUri, preparedContent.markdown);
+    const preparedContent = extractMarkdownAssets(baseTargetUri.fsPath, sourceText);
+    await this.syncGeneratedFiles(baseTargetUri, this.getTrackedGeneratedFilePaths(linkedFile.entry), preparedContent.assets);
+    await this.writeTextFile(baseTargetUri, preparedContent.markdown);
     const nextHash = sha256Text(preparedContent.markdown);
-    await this.manifestStore.updateLinkedFile(fileUri, (entry) => ({
+    await this.manifestStore.updateLinkedFile(baseTargetUri, (entry) => ({
       ...entry,
+      outputKind: "file",
       title: metadata.name,
       sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
       sourceMimeType: metadata.mimeType,
       resourceKey: metadata.resourceKey || entry.resourceKey,
-      generatedAssets: preparedContent.assets.map((asset) => ({
+      generatedFiles: preparedContent.assets.map((asset) => ({
         relativePath: asset.relativePath,
         contentHash: asset.contentHash
       })),
-      generatedAssetPaths: preparedContent.generatedAssetPaths,
+      generatedFilePaths: preparedContent.generatedAssetPaths,
       lastDriveVersion: metadata.version,
       lastLocalHash: nextHash,
       lastSyncedAt: new Date().toISOString()
     }));
 
     if (options?.reason === "manual" || options?.reason === "link") {
-      void vscode.window.setStatusBarMessage(`Synced ${path.basename(fileUri.fsPath)} from Google`, 4000);
+      void vscode.window.setStatusBarMessage(`Synced ${path.basename(baseTargetUri.fsPath)} from Google`, 4000);
     }
 
     return {
       status: "synced",
-      message: `Synced ${path.basename(fileUri.fsPath)}.`
+      message: `Synced ${path.basename(baseTargetUri.fsPath)}.`
+    };
+  }
+
+  private async doSpreadsheetSync(
+    baseTargetUri: vscode.Uri,
+    linkedFile: LinkedFileContext,
+    profile: SyncProfile,
+    metadata: { id: string; name: string; mimeType: string; version: string; resourceKey?: string; webViewLink?: string },
+    accessToken: string,
+    options?: { reason?: "manual" | "open" | "link" }
+  ): Promise<SyncOutcome> {
+    const outputState = await this.inspectSpreadsheetOutputState(baseTargetUri, linkedFile.entry);
+    if (
+      linkedFile.entry.lastDriveVersion &&
+      metadata.version === linkedFile.entry.lastDriveVersion &&
+      !outputState.hasMissing &&
+      !outputState.hasModified
+    ) {
+      return {
+        status: "skipped",
+        message: "Remote version unchanged."
+      };
+    }
+
+    if (outputState.hasModified) {
+      const selection = await vscode.window.showWarningMessage(
+        `${path.basename(baseTargetUri.fsPath)} has local CSV changes. Replace them with the latest Google content?`,
+        { modal: true },
+        "Overwrite"
+      );
+      if (selection !== "Overwrite") {
+        return {
+          status: "cancelled",
+          message: "User kept the local CSV changes."
+        };
+      }
+    }
+
+    const workbookBytes = await this.fetchWorkbookBytes(accessToken, linkedFile.entry.fileId, linkedFile.entry.resourceKey, profile);
+    const workbookOutput = parseWorkbookToCsvOutput(baseTargetUri.fsPath, workbookBytes);
+
+    if (workbookOutput.outputKind === "file" && workbookOutput.primaryFileText === undefined) {
+      throw new Error("Spreadsheet sync did not produce a primary CSV file.");
+    }
+
+    if (workbookOutput.outputKind === "directory") {
+      await this.syncGeneratedFiles(baseTargetUri, this.getTrackedGeneratedFilePaths(linkedFile.entry), workbookOutput.generatedFiles);
+      if (linkedFile.entry.outputKind === "file") {
+        await this.deletePrimaryFile(baseTargetUri);
+      }
+    } else {
+      await this.writeTextFile(baseTargetUri, workbookOutput.primaryFileText || "");
+      await this.syncGeneratedFiles(baseTargetUri, this.getTrackedGeneratedFilePaths(linkedFile.entry), []);
+    }
+
+    const nextHash = workbookOutput.outputKind === "file" ? sha256Text(workbookOutput.primaryFileText || "") : undefined;
+    await this.manifestStore.updateLinkedFile(baseTargetUri, (entry) => ({
+      ...entry,
+      outputKind: workbookOutput.outputKind,
+      title: metadata.name,
+      sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
+      sourceMimeType: metadata.mimeType,
+      resourceKey: metadata.resourceKey || entry.resourceKey,
+      generatedFiles:
+        workbookOutput.outputKind === "directory"
+          ? workbookOutput.generatedFiles.map((generatedFile) => ({
+              relativePath: generatedFile.relativePath,
+              contentHash: generatedFile.contentHash
+            }))
+          : undefined,
+      generatedFilePaths:
+        workbookOutput.outputKind === "directory"
+          ? workbookOutput.generatedFiles.map((generatedFile) => generatedFile.relativePath)
+          : undefined,
+      lastDriveVersion: metadata.version,
+      lastLocalHash: nextHash,
+      lastSyncedAt: new Date().toISOString()
+    }));
+
+    if (options?.reason === "manual" || options?.reason === "link") {
+      void vscode.window.setStatusBarMessage(`Synced ${path.basename(baseTargetUri.fsPath)} from Google`, 4000);
+    }
+
+    return {
+      status: "synced",
+      message: `Synced ${path.basename(baseTargetUri.fsPath)}.`
     };
   }
 
@@ -276,72 +392,128 @@ export class SyncManager {
     return this.driveClient.exportText(accessToken, fileId, profile.exportMimeType, resourceKey);
   }
 
-  private getTrackedAssets(entry: LinkedFileEntry): GeneratedAssetRecord[] {
-    if (entry.generatedAssets && entry.generatedAssets.length > 0) {
-      return entry.generatedAssets;
+  private async fetchWorkbookBytes(
+    accessToken: string,
+    fileId: string,
+    resourceKey: string | undefined,
+    profile: SyncProfile
+  ): Promise<Uint8Array> {
+    if (profile.retrievalMode === "drive-export-xlsx") {
+      return this.driveClient.exportFile(accessToken, fileId, profile.exportMimeType, resourceKey);
     }
 
-    return (entry.generatedAssetPaths || []).map((relativePath) => ({ relativePath }));
+    return this.driveClient.downloadFile(accessToken, fileId, resourceKey);
   }
 
-  private getTrackedAssetPaths(entry: LinkedFileEntry): string[] | undefined {
-    const trackedAssets = this.getTrackedAssets(entry);
-    return trackedAssets.length > 0 ? trackedAssets.map((asset) => asset.relativePath) : undefined;
+  private getBaseTargetUri(linkedFile: LinkedFileContext): vscode.Uri {
+    return vscode.Uri.file(fromManifestKey(linkedFile.folderPath, linkedFile.key));
   }
 
-  private async generatedAssetsNeedRepair(fileUri: vscode.Uri, entry: LinkedFileEntry): Promise<boolean> {
-    const trackedAssets = this.getTrackedAssets(entry);
-    if (trackedAssets.length === 0) {
-      return false;
+  private getTrackedGeneratedFiles(entry: LinkedFileEntry): GeneratedFileRecord[] {
+    if (entry.generatedFiles && entry.generatedFiles.length > 0) {
+      return entry.generatedFiles;
     }
 
-    const fileDirectory = path.dirname(fileUri.fsPath);
-    for (const asset of trackedAssets) {
-      const absolutePath = path.join(fileDirectory, ...asset.relativePath.split("/"));
+    return (entry.generatedFilePaths || []).map((relativePath) => ({ relativePath }));
+  }
+
+  private getTrackedGeneratedFilePaths(entry: LinkedFileEntry): string[] | undefined {
+    const trackedGeneratedFiles = this.getTrackedGeneratedFiles(entry);
+    return trackedGeneratedFiles.length > 0 ? trackedGeneratedFiles.map((generatedFile) => generatedFile.relativePath) : undefined;
+  }
+
+  private async inspectSpreadsheetOutputState(baseTargetUri: vscode.Uri, entry: LinkedFileEntry): Promise<TrackedOutputState> {
+    if (entry.outputKind === "directory") {
+      return this.inspectTrackedGeneratedFiles(baseTargetUri, entry);
+    }
+
+    const localText = await this.readLocalFileText(baseTargetUri);
+    const localState = await this.readLocalFileState(baseTargetUri, localText);
+    return {
+      hasMissing: !localState.fileExists,
+      hasModified: needsOverwriteConfirmation(localState, entry.lastLocalHash)
+    };
+  }
+
+  private async inspectTrackedGeneratedFiles(baseTargetUri: vscode.Uri, entry: LinkedFileEntry): Promise<TrackedOutputState> {
+    const trackedGeneratedFiles = this.getTrackedGeneratedFiles(entry);
+    if (trackedGeneratedFiles.length === 0) {
+      return { hasMissing: false, hasModified: false };
+    }
+
+    let hasMissing = false;
+    let hasModified = false;
+    const fileDirectory = path.dirname(baseTargetUri.fsPath);
+    for (const generatedFile of trackedGeneratedFiles) {
+      const absoluteUri = vscode.Uri.file(path.join(fileDirectory, ...generatedFile.relativePath.split("/")));
+      const openDocument = vscode.workspace.textDocuments.find((document) => document.uri.toString() === absoluteUri.toString());
+      if (openDocument) {
+        if (openDocument.isDirty) {
+          hasModified = true;
+          continue;
+        }
+
+        if (!generatedFile.contentHash) {
+          hasMissing = true;
+          continue;
+        }
+
+        const currentHash = sha256Text(openDocument.getText());
+        if (currentHash !== generatedFile.contentHash) {
+          hasModified = true;
+        }
+        continue;
+      }
 
       let fileBytes: Uint8Array;
       try {
-        fileBytes = await readFile(absolutePath);
+        fileBytes = await readFile(absoluteUri.fsPath);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return true;
+          hasMissing = true;
+          continue;
         }
 
         throw error;
       }
 
-      if (!asset.contentHash) {
-        return true;
-      }
-
-      if (sha256Bytes(fileBytes) !== asset.contentHash) {
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  private async syncGeneratedAssets(
-    fileUri: vscode.Uri,
-    previousAssetPaths: string[] | undefined,
-    nextAssets: GeneratedMarkdownAsset[]
-  ): Promise<void> {
-    const fileDirectory = path.dirname(fileUri.fsPath);
-    const nextPaths = new Set(nextAssets.map((asset) => asset.relativePath));
-
-    for (const asset of nextAssets) {
-      const absolutePath = path.join(fileDirectory, ...asset.relativePath.split("/"));
-      await mkdir(path.dirname(absolutePath), { recursive: true });
-      await writeFile(absolutePath, asset.bytes);
-    }
-
-    for (const previousAssetPath of previousAssetPaths || []) {
-      if (nextPaths.has(previousAssetPath)) {
+      if (!generatedFile.contentHash) {
+        hasMissing = true;
         continue;
       }
 
-      const absolutePath = path.join(fileDirectory, ...previousAssetPath.split("/"));
+      if (sha256Bytes(fileBytes) !== generatedFile.contentHash) {
+        hasModified = true;
+      }
+    }
+
+    return { hasMissing, hasModified };
+  }
+
+  private async syncGeneratedFiles(
+    fileUri: vscode.Uri,
+    previousGeneratedPaths: string[] | undefined,
+    nextFiles: GeneratedFilePayload[]
+  ): Promise<void> {
+    const fileDirectory = path.dirname(fileUri.fsPath);
+    const nextPaths = new Set(nextFiles.map((generatedFile) => generatedFile.relativePath));
+
+    for (const generatedFile of nextFiles) {
+      const absolutePath = path.join(fileDirectory, ...generatedFile.relativePath.split("/"));
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      if (generatedFile.mimeType === "text/csv") {
+        await this.writeTextFile(vscode.Uri.file(absolutePath), Buffer.from(generatedFile.bytes).toString("utf8"));
+      } else {
+        await writeFile(absolutePath, generatedFile.bytes);
+      }
+    }
+
+    for (const previousGeneratedPath of previousGeneratedPaths || []) {
+      if (nextPaths.has(previousGeneratedPath)) {
+        continue;
+      }
+
+      const absolutePath = path.join(fileDirectory, ...previousGeneratedPath.split("/"));
       try {
         await unlink(absolutePath);
       } catch (error) {
@@ -352,11 +524,11 @@ export class SyncManager {
     }
 
     const directories = new Set<string>();
-    for (const previousAssetPath of previousAssetPaths || []) {
-      directories.add(path.dirname(previousAssetPath));
+    for (const previousGeneratedPath of previousGeneratedPaths || []) {
+      directories.add(path.dirname(previousGeneratedPath));
     }
-    for (const asset of nextAssets) {
-      directories.add(path.dirname(asset.relativePath));
+    for (const generatedFile of nextFiles) {
+      directories.add(path.dirname(generatedFile.relativePath));
     }
 
     for (const directory of [...directories].sort((left, right) => right.length - left.length)) {
@@ -368,6 +540,16 @@ export class SyncManager {
         if (code !== "ENOENT" && code !== "ENOTEMPTY") {
           throw error;
         }
+      }
+    }
+  }
+
+  private async deletePrimaryFile(fileUri: vscode.Uri): Promise<void> {
+    try {
+      await unlink(fileUri.fsPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
       }
     }
   }

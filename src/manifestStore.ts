@@ -8,7 +8,7 @@ import { LinkedFileContext, LinkedFileEntry, SyncManifest } from "./types";
 import { fromManifestKey, toManifestKey } from "./utils/paths";
 
 const MANIFEST_FILE_NAME = ".gdocsync.json";
-const defaultManifest = (): SyncManifest => ({ version: 2, files: {} });
+const defaultManifest = (): SyncManifest => ({ version: 3, files: {} });
 
 function sortManifest(manifest: SyncManifest): SyncManifest {
   return {
@@ -18,6 +18,30 @@ function sortManifest(manifest: SyncManifest): SyncManifest {
 }
 
 export class ManifestStore {
+  private buildContext(
+    folder: vscode.WorkspaceFolder,
+    entryKey: string,
+    matchedRelativePath: string,
+    matchedOutputKind: "primary" | "generated",
+    entry: LinkedFileEntry
+  ): LinkedFileContext {
+    return {
+      folderPath: folder.uri.fsPath,
+      folderName: folder.name,
+      manifestPath: this.getManifestPath(folder.uri.fsPath),
+      key: entryKey,
+      matchedRelativePath,
+      matchedOutputKind,
+      entry
+    };
+  }
+
+  private matchesGeneratedOutput(entry: LinkedFileEntry, candidateKey: string): boolean {
+    return (entry.generatedFiles || entry.generatedFilePaths || []).some((generatedFile) =>
+      typeof generatedFile === "string" ? generatedFile === candidateKey : generatedFile.relativePath === candidateKey
+    );
+  }
+
   getManifestPath(folderPath: string): string {
     return path.join(folderPath, MANIFEST_FILE_NAME);
   }
@@ -47,39 +71,32 @@ export class ManifestStore {
     }
 
     const manifest = await this.readManifest(folder.uri.fsPath);
-    const key = toManifestKey(folder.uri.fsPath, fileUri.fsPath);
-    const entry = manifest.files[key];
-    if (!entry) {
-      return undefined;
+    const candidateKey = toManifestKey(folder.uri.fsPath, fileUri.fsPath);
+    const exactEntry = manifest.files[candidateKey];
+    if (exactEntry) {
+      return this.buildContext(folder, candidateKey, candidateKey, "primary", exactEntry);
     }
 
-    return {
-      folderPath: folder.uri.fsPath,
-      folderName: folder.name,
-      manifestPath: this.getManifestPath(folder.uri.fsPath),
-      key,
-      entry
-    };
+    for (const [entryKey, entry] of Object.entries(manifest.files)) {
+      if (this.matchesGeneratedOutput(entry, candidateKey)) {
+        return this.buildContext(folder, entryKey, candidateKey, "generated", entry);
+      }
+    }
+
+    return undefined;
   }
 
   async linkFile(fileUri: vscode.Uri, entry: LinkedFileEntry): Promise<LinkedFileContext> {
     const folder = vscode.workspace.getWorkspaceFolder(fileUri);
     if (!folder) {
-      throw new Error("Linking requires the Markdown file to live inside an open workspace folder.");
+      throw new Error("Linking requires the local file to live inside an open workspace folder.");
     }
 
     const manifest = await this.readManifest(folder.uri.fsPath);
     const key = toManifestKey(folder.uri.fsPath, fileUri.fsPath);
     manifest.files[key] = entry;
     await this.writeManifest(folder.uri.fsPath, manifest);
-
-    return {
-      folderPath: folder.uri.fsPath,
-      folderName: folder.name,
-      manifestPath: this.getManifestPath(folder.uri.fsPath),
-      key,
-      entry
-    };
+    return this.buildContext(folder, key, key, "primary", entry);
   }
 
   async updateLinkedFile(fileUri: vscode.Uri, updater: (entry: LinkedFileEntry) => LinkedFileEntry): Promise<LinkedFileContext> {
@@ -118,13 +135,7 @@ export class ManifestStore {
       for (const [key, entry] of Object.entries(manifest.files)) {
         results.push({
           fileUri: vscode.Uri.file(fromManifestKey(folder.uri.fsPath, key)),
-          context: {
-            folderPath: folder.uri.fsPath,
-            folderName: folder.name,
-            manifestPath: this.getManifestPath(folder.uri.fsPath),
-            key,
-            entry
-          }
+          context: this.buildContext(folder, key, key, "primary", entry)
         });
       }
     }

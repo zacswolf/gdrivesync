@@ -1,4 +1,11 @@
-export type SyncProfileId = "google-doc-markdown" | "word-docx-markdown";
+export type SyncProfileId =
+  | "google-doc-markdown"
+  | "word-docx-markdown"
+  | "google-sheet-csv"
+  | "excel-xlsx-csv";
+
+export type SyncOutputKind = "file" | "directory";
+export type LinkedFileMatchKind = "primary" | "generated";
 
 export interface LinkedFileEntry {
   profileId: SyncProfileId;
@@ -7,18 +14,19 @@ export interface LinkedFileEntry {
   sourceMimeType: string;
   exportMimeType: string;
   localFormat: string;
+  outputKind: SyncOutputKind;
   resourceKey?: string;
   title: string;
   syncOnOpen: boolean;
-  generatedAssets?: GeneratedAssetRecord[];
-  generatedAssetPaths?: string[];
+  generatedFiles?: GeneratedFileRecord[];
+  generatedFilePaths?: string[];
   lastSyncedAt?: string;
   lastDriveVersion?: string;
   lastLocalHash?: string;
 }
 
 export interface SyncManifest {
-  version: 2;
+  version: 3;
   files: Record<string, LinkedFileEntry>;
 }
 
@@ -87,6 +95,8 @@ export interface LinkedFileContext {
   folderName: string;
   manifestPath: string;
   key: string;
+  matchedRelativePath: string;
+  matchedOutputKind: LinkedFileMatchKind;
   entry: LinkedFileEntry;
 }
 
@@ -101,14 +111,17 @@ export interface SyncOutcome {
   message: string;
 }
 
-export interface GeneratedAssetRecord {
+export interface GeneratedFileRecord {
   relativePath: string;
   contentHash?: string;
 }
 
-export interface GeneratedMarkdownAsset {
+export interface GeneratedFilePayload {
   relativePath: string;
   bytes: Uint8Array;
   mimeType: string;
   contentHash: string;
 }
+
+export type GeneratedAssetRecord = GeneratedFileRecord;
+export type GeneratedMarkdownAsset = GeneratedFilePayload;

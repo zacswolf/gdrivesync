@@ -20,6 +20,7 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
     const idParam = url.searchParams.get("id");
     const match =
       url.pathname.match(/\/document\/d\/([a-zA-Z0-9_-]+)/) ||
+      url.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/) ||
       url.pathname.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) ||
       (idParam ? [idParam, idParam] : null);
     if (!match) {
@@ -30,7 +31,11 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
     const fileId = match[1];
     return {
       fileId,
-      sourceUrl: url.pathname.includes("/document/") ? buildGoogleDocUrl(fileId) : buildGoogleDriveFileUrl(fileId),
+      sourceUrl: url.pathname.includes("/document/")
+        ? buildGoogleDocUrl(fileId)
+        : url.pathname.includes("/spreadsheets/")
+          ? buildGoogleSheetUrl(fileId)
+          : buildGoogleDriveFileUrl(fileId),
       resourceKey
     };
   } catch {
@@ -40,6 +45,10 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
 
 export function buildGoogleDocUrl(fileId: string): string {
   return `https://docs.google.com/document/d/${fileId}/edit`;
+}
+
+export function buildGoogleSheetUrl(fileId: string): string {
+  return `https://docs.google.com/spreadsheets/d/${fileId}/edit`;
 }
 
 export function buildGoogleDriveFileUrl(fileId: string): string {

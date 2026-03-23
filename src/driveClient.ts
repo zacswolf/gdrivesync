@@ -51,6 +51,11 @@ export class DriveClient {
   }
 
   async exportText(accessToken: string, fileId: string, exportMimeType: string, resourceKey?: string): Promise<string> {
+    const bytes = await this.exportFile(accessToken, fileId, exportMimeType, resourceKey);
+    return Buffer.from(bytes).toString("utf8");
+  }
+
+  async exportFile(accessToken: string, fileId: string, exportMimeType: string, resourceKey?: string): Promise<Uint8Array> {
     const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export`);
     url.searchParams.set("mimeType", exportMimeType);
     if (resourceKey) {
@@ -67,7 +72,7 @@ export class DriveClient {
       await this.throwDriveError(response, fileId);
     }
 
-    return response.text();
+    return new Uint8Array(await response.arrayBuffer());
   }
 
   async downloadFile(accessToken: string, fileId: string, resourceKey?: string): Promise<Uint8Array> {

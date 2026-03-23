@@ -21,19 +21,20 @@ describe("normalizeManifest", () => {
     });
 
     expect(Object.keys(manifest.files)).toEqual(["docs/spec.md"]);
-    expect(manifest.version).toBe(2);
+    expect(manifest.version).toBe(3);
     expect(manifest.files["docs/spec.md"]?.profileId).toBe(getDefaultSyncProfile().id);
     expect(manifest.files["docs/spec.md"]?.fileId).toBe("abc123");
     expect(manifest.files["docs/spec.md"]?.sourceMimeType).toBe(getDefaultSyncProfile().sourceMimeType);
     expect(manifest.files["docs/spec.md"]?.exportMimeType).toBe(getDefaultSyncProfile().exportMimeType);
     expect(manifest.files["docs/spec.md"]?.localFormat).toBe(getDefaultSyncProfile().localFormat);
+    expect(manifest.files["docs/spec.md"]?.outputKind).toBe("file");
     expect(manifest.files["docs/spec.md"]?.syncOnOpen).toBe(true);
-    expect(manifest.files["docs/spec.md"]?.generatedAssets).toBeUndefined();
+    expect(manifest.files["docs/spec.md"]?.generatedFiles).toBeUndefined();
   });
 
   it("keeps valid generic entries", () => {
     const manifest = normalizeManifest({
-      version: 2,
+      version: 3,
       files: {
         "docs/spec.md": {
           profileId: "google-doc-markdown",
@@ -42,28 +43,29 @@ describe("normalizeManifest", () => {
           sourceMimeType: "application/vnd.google-apps.document",
           exportMimeType: "text/markdown",
           localFormat: "markdown",
+          outputKind: "file",
           title: "Spec",
           syncOnOpen: false,
-          generatedAssets: [
+          generatedFiles: [
             {
               relativePath: "docs/spec.assets/image1.png",
               contentHash: "sha256:abc123"
             }
           ],
-          generatedAssetPaths: ["docs/spec.assets/image1.png"]
+          generatedFilePaths: ["docs/spec.assets/image1.png"]
         }
       }
     });
 
     expect(manifest.files["docs/spec.md"]?.fileId).toBe("abc123");
     expect(manifest.files["docs/spec.md"]?.syncOnOpen).toBe(false);
-    expect(manifest.files["docs/spec.md"]?.generatedAssets).toEqual([
+    expect(manifest.files["docs/spec.md"]?.generatedFiles).toEqual([
       {
         relativePath: "docs/spec.assets/image1.png",
         contentHash: "sha256:abc123"
       }
     ]);
-    expect(manifest.files["docs/spec.md"]?.generatedAssetPaths).toEqual(["docs/spec.assets/image1.png"]);
+    expect(manifest.files["docs/spec.md"]?.generatedFilePaths).toEqual(["docs/spec.assets/image1.png"]);
   });
 
   it("upgrades legacy generatedAssetPaths into generated asset records", () => {
@@ -81,7 +83,7 @@ describe("normalizeManifest", () => {
       }
     });
 
-    expect(manifest.files["docs/spec.md"]?.generatedAssets).toEqual([
+    expect(manifest.files["docs/spec.md"]?.generatedFiles).toEqual([
       {
         relativePath: "docs/spec.assets/image1.png"
       }

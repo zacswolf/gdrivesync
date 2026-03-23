@@ -7,32 +7,54 @@ import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { PickerClient } from "./pickerClient";
 import { assertDesktopClientConfigured, loadDevelopmentEnv, resolveExtensionGoogleConfig } from "./runtimeConfig";
-import { getDefaultSyncProfile, getSupportedSourceMimeTypes, resolveSyncProfileForMimeType } from "./syncProfiles";
+import {
+  getSupportedSourceMimeTypes,
+  getSupportedSyncProfiles,
+  getSyncProfilesForTargetFamily,
+  resolveSyncProfileForMimeType
+} from "./syncProfiles";
 import { SyncManager } from "./syncManager";
 import { SecretStorageTokenStore } from "./tokenStores";
 import { ParsedDocInput, PickerSelection } from "./types";
 import { parseGoogleDocInput } from "./utils/docUrl";
-import { slugifyForFileName } from "./utils/paths";
+import { fromManifestKey, slugifyForFileName } from "./utils/paths";
 
 function isMarkdownUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
   return uri !== undefined && uri.fsPath.toLowerCase().endsWith(".md");
 }
 
-function getTargetMarkdownUri(uri?: vscode.Uri): vscode.Uri {
-  if (isMarkdownUri(uri)) {
+function isCsvUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
+  return uri !== undefined && uri.fsPath.toLowerCase().endsWith(".csv");
+}
+
+function isSupportedOutputUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
+  return isMarkdownUri(uri) || isCsvUri(uri);
+}
+
+function getTargetLocalFileUri(uri?: vscode.Uri): vscode.Uri {
+  if (isSupportedOutputUri(uri)) {
     return uri;
   }
 
   const activeUri = vscode.window.activeTextEditor?.document.uri;
-  if (isMarkdownUri(activeUri)) {
+  if (isSupportedOutputUri(activeUri)) {
     return activeUri;
   }
 
-  throw new Error("Open a Markdown file first.");
+  throw new Error("Open a Markdown or CSV file first.");
 }
 
 function sanitizeError(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+async function fileExists(uri: vscode.Uri): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(uri);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function buildCodeLensTitle(syncOnOpen: boolean): string {
@@ -41,8 +63,8 @@ function buildCodeLensTitle(syncOnOpen: boolean): string {
 
 async function promptForGoogleFileInput(): Promise<ParsedDocInput | undefined> {
   const value = await vscode.window.showInputBox({
-    placeHolder: "Paste a Google Docs, Drive, or DOCX file URL or ID",
-    prompt: "Paste a Google Docs or Google Drive file URL, or a raw file ID."
+    placeHolder: "Paste a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or ID",
+    prompt: "Paste a supported Google Docs, Sheets, or Drive file URL, or a raw file ID."
   });
   if (!value) {
     return undefined;
@@ -64,9 +86,53 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const driveClient = new DriveClient();
   const pickerClient = new PickerClient(resolveExtensionGoogleConfig);
   const syncManager = new SyncManager(authManager, driveClient, manifestStore);
-  const selectionProfile = getDefaultSyncProfile();
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const codeLensEmitter = new vscode.EventEmitter<void>();
+
+  function getProfilesForTargetUri(targetUri?: vscode.Uri) {
+    if (isMarkdownUri(targetUri)) {
+      return getSyncProfilesForTargetFamily("markdown");
+    }
+    if (isCsvUri(targetUri)) {
+      return getSyncProfilesForTargetFamily("csv");
+    }
+
+    return getSupportedSyncProfiles();
+  }
+
+  function getSelectionSourceLabel(profiles = getSupportedSyncProfiles()): string {
+    if (profiles.length > 0 && profiles.every((profile) => profile.targetFamily === "csv")) {
+      return "Spreadsheet";
+    }
+    if (profiles.length > 0 && profiles.every((profile) => profile.targetFamily === "markdown")) {
+      return "Google file";
+    }
+
+    return "Google file";
+  }
+
+  function getPickerOptions(profiles = getSupportedSyncProfiles()) {
+    const targetFamilies = [...new Set(profiles.map((profile) => profile.targetFamily))];
+    const pickerMimeTypes = [...new Set(profiles.flatMap((profile) => profile.pickerMimeTypes.split(",").map((value) => value.trim())))]
+      .filter(Boolean)
+      .join(",");
+    return {
+      sourceTypeLabel: getSelectionSourceLabel(profiles),
+      pickerViewId: targetFamilies.length > 1 ? "DOCS" : profiles[0]?.pickerViewId || "DOCUMENTS",
+      pickerMimeTypes
+    };
+  }
+
+  function getTargetTypeDescription(profiles = getSupportedSyncProfiles()): string {
+    if (profiles.length > 0 && profiles.every((profile) => profile.targetFamily === "csv")) {
+      return "CSV";
+    }
+    if (profiles.length > 0 && profiles.every((profile) => profile.targetFamily === "markdown")) {
+      return "Markdown";
+    }
+
+    return "local file";
+  }
 
   async function refreshUi(): Promise<void> {
     await updateStatusBar();
@@ -75,7 +141,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   async function updateActiveFileContext(): Promise<void> {
     const activeUri = vscode.window.activeTextEditor?.document.uri;
-    const activeLinkedFile = isMarkdownUri(activeUri) ? await manifestStore.getLinkedFile(activeUri) : undefined;
+    const activeLinkedFile = activeUri?.scheme === "file" ? await manifestStore.getLinkedFile(activeUri) : undefined;
     await vscode.commands.executeCommand("setContext", "gdocSync.activeFileLinked", Boolean(activeLinkedFile));
   }
 
@@ -99,7 +165,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     const activeUri = vscode.window.activeTextEditor?.document.uri;
-    if (!isMarkdownUri(activeUri)) {
+    if (activeUri?.scheme !== "file") {
       statusBarItem.hide();
       return;
     }
@@ -124,17 +190,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await authManager.ensureSignedIn();
   }
 
-  async function resolveSelectionFromInput(parsedInput: ParsedDocInput): Promise<PickerSelection> {
+  async function resolveSelectionFromInput(
+    parsedInput: ParsedDocInput,
+    allowedProfiles = getSupportedSyncProfiles()
+  ): Promise<PickerSelection> {
     const accessToken = await authManager.getAccessToken();
     const metadata = await driveClient.getFileMetadata(accessToken, {
       fileId: parsedInput.fileId,
       resourceKey: parsedInput.resourceKey,
-      expectedMimeTypes: getSupportedSourceMimeTypes(),
+      expectedMimeTypes: allowedProfiles.map((profile) => profile.sourceMimeType),
       sourceTypeLabel: "supported Google file"
     });
     const resolvedProfile = resolveSyncProfileForMimeType(metadata.mimeType);
-    if (!resolvedProfile) {
-      throw new Error("This Google file type is not supported for Markdown sync yet.");
+    if (!resolvedProfile || !allowedProfiles.some((profile) => profile.id === resolvedProfile.id)) {
+      throw new Error(`This Google file cannot sync to the selected ${getTargetTypeDescription(allowedProfiles)} target.`);
     }
 
     return {
@@ -147,7 +216,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
   }
 
-  async function selectDocument(): Promise<PickerSelection | undefined> {
+  async function selectDocument(allowedProfiles = getSupportedSyncProfiles()): Promise<PickerSelection | undefined> {
+    const pickerOptions = getPickerOptions(allowedProfiles);
     const selectionMode = await vscode.window.showQuickPick(
       [
         {
@@ -157,11 +227,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         },
         {
           label: "Paste Google file URL or ID",
-          detail: "Paste a direct Docs, Drive, or DOCX file URL, or a raw file ID."
+          detail: "Paste a direct Docs, Sheets, Drive, DOCX, or XLSX file URL, or a raw file ID."
         }
       ],
       {
-        placeHolder: `Choose how to link your ${selectionProfile.sourceTypeLabel}`
+        placeHolder: `Choose how to link your ${getSelectionSourceLabel(allowedProfiles)}`
       }
     );
 
@@ -170,8 +240,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (selectionMode.label === "Select from Google Drive") {
-      const pickedFile = await pickerClient.pickDocument(selectionProfile);
-      return pickedFile ? resolveSelectionFromInput(pickedFile) : undefined;
+      const pickedFile = await pickerClient.pickDocument(pickerOptions);
+      return pickedFile ? resolveSelectionFromInput(pickedFile, allowedProfiles) : undefined;
     }
 
     const parsedInput = await promptForGoogleFileInput();
@@ -180,53 +250,92 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     try {
-      return await resolveSelectionFromInput(parsedInput);
+      return await resolveSelectionFromInput(parsedInput, allowedProfiles);
     } catch (error) {
       if (error instanceof PickerGrantRequiredError) {
         void vscode.window.showInformationMessage(
-          `Google needs one browser grant for that ${selectionProfile.sourceTypeLabel} before drive.file access is available.`
+          `Google needs one browser grant for that ${getSelectionSourceLabel(allowedProfiles)} before drive.file access is available.`
         );
-        const pickedFile = await pickerClient.pickDocument(selectionProfile, parsedInput);
-        return pickedFile ? resolveSelectionFromInput(pickedFile) : undefined;
+        const pickedFile = await pickerClient.pickDocument(pickerOptions, parsedInput);
+        return pickedFile ? resolveSelectionFromInput(pickedFile, allowedProfiles) : undefined;
       }
 
       throw error;
     }
   }
 
-  async function linkMarkdownFile(targetUri?: vscode.Uri): Promise<void> {
+  async function linkLocalFile(targetUri?: vscode.Uri): Promise<void> {
     await ensureSignedIn();
-    const markdownUri = getTargetMarkdownUri(targetUri);
-    const selection = await selectDocument();
+    const localFileUri = getTargetLocalFileUri(targetUri);
+    const existingLink = await manifestStore.getLinkedFile(localFileUri);
+    if (existingLink?.matchedOutputKind === "generated") {
+      throw new Error("This file is generated from a linked spreadsheet. Link the base CSV file instead.");
+    }
+
+    const selection = await selectDocument(getProfilesForTargetUri(localFileUri));
     if (!selection) {
       return;
     }
 
-    const outcome = await syncManager.linkFile(markdownUri, selection);
+    const outcome = await syncManager.linkFile(localFileUri, selection);
     await refreshUi();
+    await revealCurrentLinkedOutput(localFileUri);
     void vscode.window.showInformationMessage(outcome.message);
+  }
+
+  async function openImportedOutput(baseTargetUri: vscode.Uri): Promise<void> {
+    const linkedFile = await manifestStore.getLinkedFile(baseTargetUri);
+    if (!linkedFile) {
+      return;
+    }
+
+    if (linkedFile.entry.outputKind === "file") {
+      const openedDocument = await vscode.workspace.openTextDocument(baseTargetUri);
+      await vscode.window.showTextDocument(openedDocument, { preview: false });
+      return;
+    }
+
+    const firstGeneratedFile = linkedFile.entry.generatedFiles?.[0];
+    if (firstGeneratedFile) {
+      const generatedUri = vscode.Uri.file(fromManifestKey(linkedFile.folderPath, firstGeneratedFile.relativePath));
+      const openedDocument = await vscode.workspace.openTextDocument(generatedUri);
+      await vscode.window.showTextDocument(openedDocument, { preview: false });
+    }
+  }
+
+  async function revealCurrentLinkedOutput(currentUri: vscode.Uri, baseTargetUri = currentUri): Promise<void> {
+    if (await fileExists(currentUri)) {
+      return;
+    }
+
+    await openImportedOutput(baseTargetUri);
   }
 
   async function importGoogleFile(): Promise<void> {
     await ensureSignedIn();
-    const selection = await selectDocument();
+    const selection = await selectDocument(getSupportedSyncProfiles());
     if (!selection) {
       return;
     }
 
+    const resolvedProfile = resolveSyncProfileForMimeType(selection.sourceMimeType);
+    if (!resolvedProfile) {
+      throw new Error("This Google file type is not supported yet.");
+    }
+
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
-      throw new Error(`Open a workspace folder before importing a ${selectionProfile.sourceTypeLabel}.`);
+      throw new Error(`Open a workspace folder before importing a ${resolvedProfile.sourceTypeLabel}.`);
     }
 
     const targetUri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(
-        path.join(workspaceFolder.uri.fsPath, `${slugifyForFileName(selection.title)}.${selectionProfile.targetFileExtension}`)
+        path.join(workspaceFolder.uri.fsPath, `${slugifyForFileName(selection.title)}.${resolvedProfile.targetFileExtension}`)
       ),
       filters: {
-        Markdown: [selectionProfile.targetFileExtension]
+        [resolvedProfile.targetFileExtension.toUpperCase()]: [resolvedProfile.targetFileExtension]
       },
-      saveLabel: `Import ${selectionProfile.sourceTypeLabel}`
+      saveLabel: `Import ${resolvedProfile.sourceTypeLabel}`
     });
 
     if (!targetUri) {
@@ -234,21 +343,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (!vscode.workspace.getWorkspaceFolder(targetUri)) {
-      throw new Error("Imported Markdown files must live inside an open workspace folder.");
+      throw new Error("Imported local files must live inside an open workspace folder.");
     }
 
     const outcome = await syncManager.linkFile(targetUri, selection);
-    const openedDocument = await vscode.workspace.openTextDocument(targetUri);
-    await vscode.window.showTextDocument(openedDocument, { preview: false });
+    await openImportedOutput(targetUri);
     await refreshUi();
     void vscode.window.showInformationMessage(outcome.message);
   }
 
   async function syncCurrentFile(targetUri?: vscode.Uri): Promise<void> {
     await ensureSignedIn();
-    const markdownUri = getTargetMarkdownUri(targetUri);
-    const outcome = await syncManager.syncFile(markdownUri, { reason: "manual" });
+    const localFileUri = getTargetLocalFileUri(targetUri);
+    const linkedFile = await manifestStore.getLinkedFile(localFileUri);
+    const baseTargetUri = linkedFile ? vscode.Uri.file(fromManifestKey(linkedFile.folderPath, linkedFile.key)) : localFileUri;
+    const outcome = await syncManager.syncFile(localFileUri, { reason: "manual" });
     await refreshUi();
+    await revealCurrentLinkedOutput(localFileUri, baseTargetUri);
     if (outcome.status !== "skipped") {
       void vscode.window.showInformationMessage(outcome.message);
     }
@@ -256,25 +367,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   async function toggleSyncOnOpen(targetUri?: vscode.Uri): Promise<void> {
     await ensureTrustedWorkspace();
-    const markdownUri = getTargetMarkdownUri(targetUri);
-    const enabled = await syncManager.toggleSyncOnOpen(markdownUri);
+    const localFileUri = getTargetLocalFileUri(targetUri);
+    const enabled = await syncManager.toggleSyncOnOpen(localFileUri);
     await refreshUi();
     void vscode.window.showInformationMessage(
-      enabled ? "Auto-sync on open is now enabled for this Markdown file." : "Auto-sync on open is now disabled."
+      enabled ? "Auto-sync on open is now enabled for this linked file." : "Auto-sync on open is now disabled."
     );
   }
 
   async function unlinkCurrentFile(targetUri?: vscode.Uri): Promise<void> {
     await ensureTrustedWorkspace();
-    const markdownUri = getTargetMarkdownUri(targetUri);
-    const removed = await syncManager.unlinkFile(markdownUri, { removeGeneratedAssets: false });
+    const localFileUri = getTargetLocalFileUri(targetUri);
+    const removed = await syncManager.unlinkFile(localFileUri, { removeGeneratedFiles: false });
     await refreshUi();
     if (removed) {
       void vscode.window.showInformationMessage("The file is no longer linked to Google.");
     }
   }
 
-  async function handleDeletedMarkdownFiles(files: readonly vscode.Uri[]): Promise<void> {
+  async function handleDeletedLocalFiles(files: readonly vscode.Uri[]): Promise<void> {
     if (!vscode.workspace.isTrusted) {
       return;
     }
@@ -288,11 +399,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     let unlinkedCount = 0;
     for (const file of files) {
-      if (!isMarkdownUri(file)) {
+      if (!isSupportedOutputUri(file)) {
         continue;
       }
 
-      const removed = await syncManager.unlinkFile(file, { removeGeneratedAssets: true });
+      const linkedFile = await manifestStore.getLinkedFile(file);
+      if (!linkedFile || linkedFile.matchedOutputKind !== "primary" || linkedFile.entry.outputKind !== "file") {
+        continue;
+      }
+
+      const removed = await syncManager.unlinkFile(file, { removeGeneratedFiles: true });
       if (removed) {
         unlinkedCount += 1;
       }
@@ -301,7 +417,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (unlinkedCount > 0) {
       await refreshUi();
       void vscode.window.setStatusBarMessage(
-        unlinkedCount === 1 ? "Unlinked deleted Markdown file from Google." : `Unlinked ${unlinkedCount} deleted Markdown files from Google.`,
+        unlinkedCount === 1 ? "Unlinked deleted file from Google." : `Unlinked ${unlinkedCount} deleted files from Google.`,
         4000
       );
     }
@@ -310,7 +426,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const codeLensProvider: vscode.CodeLensProvider = {
     onDidChangeCodeLenses: codeLensEmitter.event,
     async provideCodeLenses(document) {
-      if (document.uri.scheme !== "file" || document.languageId !== "markdown") {
+      if (document.uri.scheme !== "file" || (document.languageId !== "markdown" && document.languageId !== "csv")) {
         return [];
       }
 
@@ -333,7 +449,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     statusBarItem,
     codeLensEmitter,
-    vscode.languages.registerCodeLensProvider({ scheme: "file", language: "markdown" }, codeLensProvider),
+    vscode.languages.registerCodeLensProvider(
+      [
+        { scheme: "file", language: "markdown" },
+        { scheme: "file", language: "csv" }
+      ],
+      codeLensProvider
+    ),
     vscode.commands.registerCommand("gdocSync.signIn", async () => {
       try {
         await ensureTrustedWorkspace();
@@ -357,7 +479,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("gdocSync.linkCurrentFile", async (uri?: vscode.Uri) => {
       try {
-        await linkMarkdownFile(uri);
+        await linkLocalFile(uri);
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
@@ -381,7 +503,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await ensureSignedIn();
         const summary = await syncManager.syncAll();
         const linkedCount = summary.results.length;
-        void vscode.window.showInformationMessage(`Synced ${summary.syncedCount} of ${linkedCount} linked Markdown files.`);
+        void vscode.window.showInformationMessage(`Synced ${summary.syncedCount} of ${linkedCount} linked files.`);
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
@@ -416,12 +538,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.workspace.onDidOpenTextDocument((document) => {
-      if (document.uri.scheme === "file" && document.languageId === "markdown" && vscode.workspace.isTrusted) {
+      if (
+        document.uri.scheme === "file" &&
+        (document.languageId === "markdown" || document.languageId === "csv") &&
+        vscode.workspace.isTrusted
+      ) {
         syncManager.scheduleSyncOnOpen(document.uri);
       }
     }),
     vscode.workspace.onDidDeleteFiles((event) => {
-      void handleDeletedMarkdownFiles(event.files);
+      void handleDeletedLocalFiles(event.files);
     })
   );
 

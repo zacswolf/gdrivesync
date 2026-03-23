@@ -1,7 +1,7 @@
 {
   "name": "gdrivesync-vscode-extension",
   "displayName": "GDriveSync",
-  "description": "One-way Google Drive file to Markdown sync for VS Code.",
+  "description": "One-way Google Drive file to Markdown or CSV sync for VS Code.",
   "version": "0.1.0",
   "publisher": "zacswolf",
   "license": "MIT",
@@ -14,7 +14,10 @@
   ],
   "keywords": [
     "google docs",
+    "google sheets",
     "markdown",
+    "csv",
+    "xlsx",
     "sync",
     "drive",
     "docs"
@@ -52,12 +55,12 @@
       },
       {
         "command": "gdocSync.linkCurrentFile",
-        "title": "Link Current Markdown File",
+        "title": "Link Current File",
         "category": "GDriveSync"
       },
       {
         "command": "gdocSync.importGoogleDoc",
-        "title": "Import Google File as New Markdown File",
+        "title": "Import Google File as New Local File",
         "category": "GDriveSync"
       },
       {
@@ -87,39 +90,39 @@
         {
           "command": "gdocSync.syncCurrentFile",
           "group": "navigation@100",
-          "when": "resourceLangId == markdown && isWorkspaceTrusted && gdocSync.activeFileLinked"
+          "when": "(resourceLangId == markdown || resourceLangId == csv) && isWorkspaceTrusted && gdocSync.activeFileLinked"
         },
         {
           "command": "gdocSync.toggleSyncOnOpen",
           "group": "navigation@101",
-          "when": "resourceLangId == markdown && isWorkspaceTrusted && gdocSync.activeFileLinked"
+          "when": "(resourceLangId == markdown || resourceLangId == csv) && isWorkspaceTrusted && gdocSync.activeFileLinked"
         },
         {
           "command": "gdocSync.unlinkCurrentFile",
           "group": "navigation@102",
-          "when": "resourceLangId == markdown && isWorkspaceTrusted && gdocSync.activeFileLinked"
+          "when": "(resourceLangId == markdown || resourceLangId == csv) && isWorkspaceTrusted && gdocSync.activeFileLinked"
         }
       ],
       "explorer/context": [
         {
           "command": "gdocSync.linkCurrentFile",
           "group": "navigation@100",
-          "when": "resourceExtname == .md && isWorkspaceTrusted"
+          "when": "(resourceExtname == .md || resourceExtname == .csv) && isWorkspaceTrusted"
         },
         {
           "command": "gdocSync.syncCurrentFile",
           "group": "navigation@101",
-          "when": "resourceExtname == .md && isWorkspaceTrusted"
+          "when": "(resourceExtname == .md || resourceExtname == .csv) && isWorkspaceTrusted"
         },
         {
           "command": "gdocSync.toggleSyncOnOpen",
           "group": "navigation@102",
-          "when": "resourceExtname == .md && isWorkspaceTrusted"
+          "when": "(resourceExtname == .md || resourceExtname == .csv) && isWorkspaceTrusted"
         },
         {
           "command": "gdocSync.unlinkCurrentFile",
           "group": "navigation@103",
-          "when": "resourceExtname == .md && isWorkspaceTrusted"
+          "when": "(resourceExtname == .md || resourceExtname == .csv) && isWorkspaceTrusted"
         }
       ],
       "commandPalette": [
@@ -160,12 +163,12 @@
         "gdocSync.showStatusBar": {
           "type": "boolean",
           "default": true,
-          "description": "Show a status bar item for the active linked Markdown file."
+          "description": "Show a status bar item for the active linked file."
         },
         "gdocSync.unlinkOnMarkdownDelete": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically unlink a linked Markdown file when the file is deleted. Turn this off to keep the current behavior where deleted files stay linked and can be recreated by sync."
+          "description": "Automatically unlink a linked primary local file when that file is deleted. Generated spreadsheet CSV children are not unlinked by this setting."
         },
         "gdocSync.development.desktopClientId": {
           "type": "string",
@@ -213,6 +216,7 @@
     "@types/turndown": "^5.0.6",
     "mammoth": "^1.12.0",
     "turndown": "^7.2.2",
-    "turndown-plugin-gfm": "^1.0.2"
+    "turndown-plugin-gfm": "^1.0.2",
+    "xlsx": "^0.18.5"
   }
 }

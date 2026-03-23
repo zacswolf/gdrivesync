@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildGoogleDocUrl, buildGoogleDriveFileUrl, parseGoogleDocInput } from "../../src/utils/docUrl";
+import { buildGoogleDocUrl, buildGoogleDriveFileUrl, buildGoogleSheetUrl, parseGoogleDocInput } from "../../src/utils/docUrl";
 
 describe("parseGoogleDocInput", () => {
   it("parses a raw file ID", () => {
@@ -33,6 +33,13 @@ describe("parseGoogleDocInput", () => {
     expect(parseGoogleDocInput("https://drive.google.com/open?id=1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")).toEqual({
       fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
       sourceUrl: buildGoogleDriveFileUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")
+    });
+  });
+
+  it("parses a Google Sheets URL", () => {
+    expect(parseGoogleDocInput("https://docs.google.com/spreadsheets/d/1AbCdEfGhIjKlMnOpQrStUvWxYz123456789/edit?gid=0")).toEqual({
+      fileId: "1AbCdEfGhIjKlMnOpQrStUvWxYz123456789",
+      sourceUrl: buildGoogleSheetUrl("1AbCdEfGhIjKlMnOpQrStUvWxYz123456789")
     });
   });
 

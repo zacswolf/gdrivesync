@@ -3,26 +3,31 @@ import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 
 import { GoogleReleaseConfig, ParsedDocInput, PickerRequestPayload } from "./types";
-import { SyncProfile } from "./syncProfiles";
 import { decodeBase64UrlJson, encodeBase64UrlJson } from "./utils/base64url";
 import { createLocalCallbackServer } from "./utils/localCallbackServer";
+
+interface PickerRequestOptions {
+  sourceTypeLabel: string;
+  pickerViewId: string;
+  pickerMimeTypes: string;
+}
 
 export class PickerClient {
   constructor(private readonly configProvider: () => GoogleReleaseConfig) {}
 
-  async pickDocument(profile: SyncProfile, initialFile?: ParsedDocInput): Promise<ParsedDocInput | undefined> {
+  async pickDocument(requestOptions: PickerRequestOptions, initialFile?: ParsedDocInput): Promise<ParsedDocInput | undefined> {
     const callbackServer = await createLocalCallbackServer(
       "/picker/callback",
-      `${profile.sourceTypeLabel} selected`,
-      `Your ${profile.sourceTypeLabel} selection has been sent back to VS Code.`
+      `${requestOptions.sourceTypeLabel} selected`,
+      `Your ${requestOptions.sourceTypeLabel} selection has been sent back to VS Code.`
     );
     const request = encodeBase64UrlJson({
       nonce: randomUUID(),
       localRedirect: callbackServer.localRedirect,
-      sourceTypeLabel: profile.sourceTypeLabel,
-      pickerViewId: profile.pickerViewId,
-      pickerMimeTypes: profile.pickerMimeTypes,
-      supportedMimeTypes: profile.pickerMimeTypes.split(",").map((value) => value.trim()).filter(Boolean),
+      sourceTypeLabel: requestOptions.sourceTypeLabel,
+      pickerViewId: requestOptions.pickerViewId,
+      pickerMimeTypes: requestOptions.pickerMimeTypes,
+      supportedMimeTypes: requestOptions.pickerMimeTypes.split(",").map((value) => value.trim()).filter(Boolean),
       hintFileId: initialFile?.fileId,
       resourceKey: initialFile?.resourceKey,
       loginHint: this.configProvider().loginHint
@@ -64,7 +69,7 @@ export class PickerClient {
 
       return {
         fileId,
-        sourceUrl: callbackParams.get("sourceUrl") || profile.buildSourceUrl(fileId),
+        sourceUrl: callbackParams.get("sourceUrl") || "",
         resourceKey: callbackParams.get("resourceKey") || undefined
       };
     } finally {
