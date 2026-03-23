@@ -37,6 +37,24 @@
         line-height: 1.6;
       }
 
+      button {
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        background: #1f6d43;
+        color: white;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 600;
+        margin-top: 1rem;
+        padding: 0.85rem 1.2rem;
+      }
+
+      button[disabled] {
+        cursor: wait;
+        opacity: 0.7;
+      }
+
       code {
         word-break: break-word;
       }
@@ -57,6 +75,7 @@
       <h1>Select a Google Doc</h1>
       <p id="status">Preparing the Google Picker flow…</p>
       <p id="hint" class="note" hidden></p>
+      <button id="continue" type="button" hidden>Continue with Google</button>
     </main>
     <script>
       const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
@@ -70,7 +89,8 @@
       function getElements() {
         return {
           status: document.getElementById("status"),
-          hint: document.getElementById("hint")
+          hint: document.getElementById("hint"),
+          continueButton: document.getElementById("continue")
         };
       }
 
@@ -82,6 +102,14 @@
         const { hint } = getElements();
         hint.hidden = !message;
         hint.textContent = message || "";
+      }
+
+      function setContinueButtonState({ hidden, disabled, label, onClick }) {
+        const { continueButton } = getElements();
+        continueButton.hidden = hidden;
+        continueButton.disabled = disabled;
+        continueButton.textContent = label;
+        continueButton.onclick = onClick || null;
       }
 
       function parseRequest() {
@@ -167,6 +195,25 @@
         });
       }
 
+      function waitForGoogleIdentity() {
+        return new Promise((resolve, reject) => {
+          let attempts = 0;
+          const timer = window.setInterval(() => {
+            if (window.google && google.accounts && google.accounts.oauth2) {
+              window.clearInterval(timer);
+              resolve();
+              return;
+            }
+
+            attempts += 1;
+            if (attempts > 100) {
+              window.clearInterval(timer);
+              reject(new Error("Google Identity Services did not finish loading."));
+            }
+          }, 100);
+        });
+      }
+
       async function tryHintLookup(request, accessToken) {
         if (!request.payload.hintDocId) {
           return null;
@@ -235,9 +282,7 @@
         picker.setVisible(true);
       }
 
-      async function main() {
-        const request = parseRequest();
-        const config = validateSiteConfig();
+      async function startPickerFlow(request, config) {
         setStatus("Requesting Google access…");
         const tokenResponse = await requestGoogleToken(config.googleWebClientId);
         const accessToken = tokenResponse.access_token;
@@ -252,6 +297,51 @@
         setStatus("Opening Google Picker…");
         await loadPickerApi();
         openPicker(config, request, accessToken);
+      }
+
+      function showRetryButton(request, config) {
+        setContinueButtonState({
+          hidden: false,
+          disabled: false,
+          label: "Try Again",
+          onClick: () => {
+            setContinueButtonState({
+              hidden: false,
+              disabled: true,
+              label: "Opening Google Picker…"
+            });
+            void startPickerFlow(request, config).catch((error) => {
+              console.error(error);
+              setStatus(error.message || "Google Picker failed.");
+              showRetryButton(request, config);
+            });
+          }
+        });
+      }
+
+      async function main() {
+        const request = parseRequest();
+        const config = validateSiteConfig();
+        setStatus("Waiting for Google libraries…");
+        await waitForGoogleIdentity();
+        setStatus("Continue to choose a Google Doc.");
+        setContinueButtonState({
+          hidden: false,
+          disabled: false,
+          label: "Continue with Google",
+          onClick: () => {
+            setContinueButtonState({
+              hidden: false,
+              disabled: true,
+              label: "Opening Google Picker…"
+            });
+            void startPickerFlow(request, config).catch((error) => {
+              console.error(error);
+              setStatus(error.message || "Google Picker failed.");
+              showRetryButton(request, config);
+            });
+          }
+        });
       }
 
       window.addEventListener("load", () => {
