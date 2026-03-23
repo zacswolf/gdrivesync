@@ -109,6 +109,12 @@ export interface TokenStore {
 export interface SyncOutcome {
   status: "synced" | "skipped" | "cancelled";
   message: string;
+  transition?: {
+    kind: "spreadsheet-output-kind-changed";
+    previousOutputKind: SyncOutputKind;
+    nextOutputKind: SyncOutputKind;
+    generatedDirectoryPath?: string;
+  };
 }
 
 export interface GeneratedFileRecord {

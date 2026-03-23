@@ -15,7 +15,7 @@ import {
 } from "./syncProfiles";
 import { SyncManager } from "./syncManager";
 import { SecretStorageTokenStore } from "./tokenStores";
-import { ParsedDocInput, PickerSelection } from "./types";
+import { ParsedDocInput, PickerSelection, SyncOutcome } from "./types";
 import { parseGoogleDocInput } from "./utils/docUrl";
 import { fromManifestKey, slugifyForFileName } from "./utils/paths";
 
@@ -59,6 +59,21 @@ async function fileExists(uri: vscode.Uri): Promise<boolean> {
 
 function buildCodeLensTitle(syncOnOpen: boolean): string {
   return syncOnOpen ? "Sync from Google • Auto on Open" : "Sync from Google";
+}
+
+function buildSyncAllMessage(summary: { syncedCount: number; skippedCount: number; cancelledCount: number }): string {
+  const parts: string[] = [];
+  if (summary.syncedCount > 0) {
+    parts.push(`${summary.syncedCount} synced`);
+  }
+  if (summary.skippedCount > 0) {
+    parts.push(`${summary.skippedCount} already up to date`);
+  }
+  if (summary.cancelledCount > 0) {
+    parts.push(`${summary.cancelledCount} cancelled`);
+  }
+
+  return parts.length > 0 ? parts.join(", ") : "No linked files were processed.";
 }
 
 async function promptForGoogleFileInput(): Promise<ParsedDocInput | undefined> {
@@ -132,6 +147,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     return "local file";
+  }
+
+  async function showSyncOutcome(outcome: SyncOutcome): Promise<void> {
+    const generatedDirectoryPath = outcome.transition?.generatedDirectoryPath;
+    if (
+      outcome.transition?.kind === "spreadsheet-output-kind-changed" &&
+      outcome.transition.nextOutputKind === "directory" &&
+      generatedDirectoryPath
+    ) {
+      const selection = await vscode.window.showInformationMessage(outcome.message, "Reveal Folder");
+      if (selection === "Reveal Folder") {
+        await vscode.commands.executeCommand("revealInExplorer", vscode.Uri.file(generatedDirectoryPath));
+      }
+      return;
+    }
+
+    void vscode.window.showInformationMessage(outcome.message);
   }
 
   async function refreshUi(): Promise<void> {
@@ -280,7 +312,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const outcome = await syncManager.linkFile(localFileUri, selection);
     await refreshUi();
     await revealCurrentLinkedOutput(localFileUri);
-    void vscode.window.showInformationMessage(outcome.message);
+    await showSyncOutcome(outcome);
   }
 
   async function openImportedOutput(baseTargetUri: vscode.Uri): Promise<void> {
@@ -349,7 +381,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const outcome = await syncManager.linkFile(targetUri, selection);
     await openImportedOutput(targetUri);
     await refreshUi();
-    void vscode.window.showInformationMessage(outcome.message);
+    await showSyncOutcome(outcome);
   }
 
   async function syncCurrentFile(targetUri?: vscode.Uri): Promise<void> {
@@ -361,7 +393,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await refreshUi();
     await revealCurrentLinkedOutput(localFileUri, baseTargetUri);
     if (outcome.status !== "skipped") {
-      void vscode.window.showInformationMessage(outcome.message);
+      await showSyncOutcome(outcome);
     }
   }
 
@@ -502,8 +534,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       try {
         await ensureSignedIn();
         const summary = await syncManager.syncAll();
-        const linkedCount = summary.results.length;
-        void vscode.window.showInformationMessage(`Synced ${summary.syncedCount} of ${linkedCount} linked files.`);
+        void vscode.window.showInformationMessage(buildSyncAllMessage(summary));
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }

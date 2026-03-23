@@ -105,14 +105,25 @@ export class SyncManager {
     return syncTask;
   }
 
-  async syncAll(): Promise<{ results: Array<{ file: string; outcome: SyncOutcome }>; syncedCount: number }> {
+  async syncAll(): Promise<{
+    results: Array<{ file: string; outcome: SyncOutcome }>;
+    syncedCount: number;
+    skippedCount: number;
+    cancelledCount: number;
+  }> {
     const linkedFiles = await this.manifestStore.listLinkedFiles();
     const results: Array<{ file: string; outcome: SyncOutcome }> = [];
     let syncedCount = 0;
+    let skippedCount = 0;
+    let cancelledCount = 0;
     for (const linkedFile of linkedFiles) {
       const outcome = await this.syncFile(linkedFile.fileUri, { reason: "manual" });
       if (outcome.status === "synced") {
         syncedCount += 1;
+      } else if (outcome.status === "skipped") {
+        skippedCount += 1;
+      } else if (outcome.status === "cancelled") {
+        cancelledCount += 1;
       }
 
       results.push({
@@ -121,7 +132,7 @@ export class SyncManager {
       });
     }
 
-    return { results, syncedCount };
+    return { results, syncedCount, skippedCount, cancelledCount };
   }
 
   scheduleSyncOnOpen(fileUri: vscode.Uri): void {
@@ -327,7 +338,19 @@ export class SyncManager {
 
     return {
       status: "synced",
-      message: syncSummary
+      message: syncSummary,
+      transition:
+        linkedFile.entry.outputKind !== workbookOutput.outputKind
+          ? {
+              kind: "spreadsheet-output-kind-changed",
+              previousOutputKind: linkedFile.entry.outputKind,
+              nextOutputKind: workbookOutput.outputKind,
+              generatedDirectoryPath:
+                workbookOutput.outputKind === "directory"
+                  ? path.join(path.dirname(baseTargetUri.fsPath), path.parse(baseTargetUri.fsPath).name)
+                  : undefined
+            }
+          : undefined
     };
   }
 
