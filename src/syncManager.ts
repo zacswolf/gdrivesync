@@ -9,8 +9,8 @@ import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
 import { getSyncProfile } from "./syncProfiles";
-import { GeneratedMarkdownAsset, PickerSelection, SyncOutcome } from "./types";
-import { sha256Text } from "./utils/hash";
+import { GeneratedAssetRecord, GeneratedMarkdownAsset, LinkedFileEntry, PickerSelection, SyncOutcome } from "./types";
+import { sha256Bytes, sha256Text } from "./utils/hash";
 import { containsEmbeddedImageData, extractMarkdownAssets } from "./utils/markdownAssets";
 
 export class SyncManager {
@@ -36,6 +36,7 @@ export class SyncManager {
       resourceKey: selection.resourceKey,
       title: selection.title,
       syncOnOpen,
+      generatedAssets: undefined,
       generatedAssetPaths: undefined,
       lastDriveVersion: undefined,
       lastLocalHash: undefined,
@@ -59,7 +60,7 @@ export class SyncManager {
     }
 
     if (options?.removeGeneratedAssets) {
-      await this.syncGeneratedAssets(fileUri, context.entry.generatedAssetPaths, []);
+      await this.syncGeneratedAssets(fileUri, this.getTrackedAssetPaths(context.entry), []);
     }
 
     return this.manifestStore.unlinkFile(fileUri);
@@ -141,7 +142,13 @@ export class SyncManager {
     });
     const localText = await this.readLocalFileText(fileUri);
     const needsAssetMigration = localText ? containsEmbeddedImageData(localText) : false;
-    if (linkedFile.entry.lastDriveVersion && metadata.version === linkedFile.entry.lastDriveVersion && !needsAssetMigration) {
+    const trackedAssetsNeedRepair = await this.generatedAssetsNeedRepair(fileUri, linkedFile.entry);
+    if (
+      linkedFile.entry.lastDriveVersion &&
+      metadata.version === linkedFile.entry.lastDriveVersion &&
+      !needsAssetMigration &&
+      !trackedAssetsNeedRepair
+    ) {
       return {
         status: "skipped",
         message: "Remote version unchanged."
@@ -164,11 +171,15 @@ export class SyncManager {
     }
 
     const sourceText =
-      linkedFile.entry.lastDriveVersion && metadata.version === linkedFile.entry.lastDriveVersion && localText
+      linkedFile.entry.lastDriveVersion &&
+      metadata.version === linkedFile.entry.lastDriveVersion &&
+      localText &&
+      needsAssetMigration &&
+      !trackedAssetsNeedRepair
         ? localText
         : await this.fetchSourceMarkdown(accessToken, linkedFile.entry.fileId, linkedFile.entry.resourceKey, profile);
     const preparedContent = extractMarkdownAssets(fileUri.fsPath, sourceText);
-    await this.syncGeneratedAssets(fileUri, linkedFile.entry.generatedAssetPaths, preparedContent.assets);
+    await this.syncGeneratedAssets(fileUri, this.getTrackedAssetPaths(linkedFile.entry), preparedContent.assets);
     await this.writeTextFile(fileUri, preparedContent.markdown);
     const nextHash = sha256Text(preparedContent.markdown);
     await this.manifestStore.updateLinkedFile(fileUri, (entry) => ({
@@ -177,6 +188,10 @@ export class SyncManager {
       sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
       sourceMimeType: metadata.mimeType,
       resourceKey: metadata.resourceKey || entry.resourceKey,
+      generatedAssets: preparedContent.assets.map((asset) => ({
+        relativePath: asset.relativePath,
+        contentHash: asset.contentHash
+      })),
       generatedAssetPaths: preparedContent.generatedAssetPaths,
       lastDriveVersion: metadata.version,
       lastLocalHash: nextHash,
@@ -259,6 +274,52 @@ export class SyncManager {
     }
 
     return this.driveClient.exportText(accessToken, fileId, profile.exportMimeType, resourceKey);
+  }
+
+  private getTrackedAssets(entry: LinkedFileEntry): GeneratedAssetRecord[] {
+    if (entry.generatedAssets && entry.generatedAssets.length > 0) {
+      return entry.generatedAssets;
+    }
+
+    return (entry.generatedAssetPaths || []).map((relativePath) => ({ relativePath }));
+  }
+
+  private getTrackedAssetPaths(entry: LinkedFileEntry): string[] | undefined {
+    const trackedAssets = this.getTrackedAssets(entry);
+    return trackedAssets.length > 0 ? trackedAssets.map((asset) => asset.relativePath) : undefined;
+  }
+
+  private async generatedAssetsNeedRepair(fileUri: vscode.Uri, entry: LinkedFileEntry): Promise<boolean> {
+    const trackedAssets = this.getTrackedAssets(entry);
+    if (trackedAssets.length === 0) {
+      return false;
+    }
+
+    const fileDirectory = path.dirname(fileUri.fsPath);
+    for (const asset of trackedAssets) {
+      const absolutePath = path.join(fileDirectory, ...asset.relativePath.split("/"));
+
+      let fileBytes: Uint8Array;
+      try {
+        fileBytes = await readFile(absolutePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return true;
+        }
+
+        throw error;
+      }
+
+      if (!asset.contentHash) {
+        return true;
+      }
+
+      if (sha256Bytes(fileBytes) !== asset.contentHash) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   private async syncGeneratedAssets(

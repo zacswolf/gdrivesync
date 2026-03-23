@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { containsEmbeddedImageData, extractMarkdownAssets } from "../../src/utils/markdownAssets";
+import { sha256Bytes } from "../../src/utils/hash";
 
 describe("extractMarkdownAssets", () => {
   it("moves embedded reference and inline images into a sibling assets folder", () => {
@@ -28,6 +29,8 @@ describe("extractMarkdownAssets", () => {
     ]);
     expect(Buffer.from(result.assets[0]?.bytes || []).toString("utf8")).toBe("Hello");
     expect(Buffer.from(result.assets[1]?.bytes || []).toString("utf8")).toBe("World");
+    expect(result.assets[0]?.contentHash).toBe(sha256Bytes(result.assets[0]?.bytes || new Uint8Array()));
+    expect(result.assets[1]?.contentHash).toBe(sha256Bytes(result.assets[1]?.bytes || new Uint8Array()));
   });
 
   it("detects embedded image data", () => {

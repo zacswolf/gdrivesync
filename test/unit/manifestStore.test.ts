@@ -28,6 +28,7 @@ describe("normalizeManifest", () => {
     expect(manifest.files["docs/spec.md"]?.exportMimeType).toBe(getDefaultSyncProfile().exportMimeType);
     expect(manifest.files["docs/spec.md"]?.localFormat).toBe(getDefaultSyncProfile().localFormat);
     expect(manifest.files["docs/spec.md"]?.syncOnOpen).toBe(true);
+    expect(manifest.files["docs/spec.md"]?.generatedAssets).toBeUndefined();
   });
 
   it("keeps valid generic entries", () => {
@@ -43,6 +44,12 @@ describe("normalizeManifest", () => {
           localFormat: "markdown",
           title: "Spec",
           syncOnOpen: false,
+          generatedAssets: [
+            {
+              relativePath: "docs/spec.assets/image1.png",
+              contentHash: "sha256:abc123"
+            }
+          ],
           generatedAssetPaths: ["docs/spec.assets/image1.png"]
         }
       }
@@ -50,6 +57,34 @@ describe("normalizeManifest", () => {
 
     expect(manifest.files["docs/spec.md"]?.fileId).toBe("abc123");
     expect(manifest.files["docs/spec.md"]?.syncOnOpen).toBe(false);
+    expect(manifest.files["docs/spec.md"]?.generatedAssets).toEqual([
+      {
+        relativePath: "docs/spec.assets/image1.png",
+        contentHash: "sha256:abc123"
+      }
+    ]);
     expect(manifest.files["docs/spec.md"]?.generatedAssetPaths).toEqual(["docs/spec.assets/image1.png"]);
+  });
+
+  it("upgrades legacy generatedAssetPaths into generated asset records", () => {
+    const manifest = normalizeManifest({
+      version: 2,
+      files: {
+        "docs/spec.md": {
+          profileId: "google-doc-markdown",
+          fileId: "abc123",
+          sourceUrl: "https://docs.google.com/document/d/abc123/edit",
+          title: "Spec",
+          syncOnOpen: false,
+          generatedAssetPaths: ["docs/spec.assets/image1.png"]
+        }
+      }
+    });
+
+    expect(manifest.files["docs/spec.md"]?.generatedAssets).toEqual([
+      {
+        relativePath: "docs/spec.assets/image1.png"
+      }
+    ]);
   });
 });

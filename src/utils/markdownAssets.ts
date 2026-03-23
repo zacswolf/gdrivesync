@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { GeneratedMarkdownAsset } from "../types";
+import { sha256Bytes } from "./hash";
 import { slugifyForFileName } from "./paths";
 
 const REFERENCE_DATA_IMAGE_PATTERN =
@@ -81,7 +82,8 @@ export function extractMarkdownAssets(markdownFilePath: string, markdown: string
     assets.push({
       relativePath,
       bytes,
-      mimeType
+      mimeType,
+      contentHash: sha256Bytes(bytes)
     });
     assetsByPayload.set(payloadKey, relativePath);
     return relativePath;

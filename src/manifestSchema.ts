@@ -1,5 +1,5 @@
 import { getDefaultSyncProfile, getSyncProfile, isSyncProfileId } from "./syncProfiles";
-import { SyncManifest } from "./types";
+import { GeneratedAssetRecord, SyncManifest } from "./types";
 
 function defaultManifest(): SyncManifest {
   return {
@@ -19,6 +19,37 @@ function toStringArray(value: unknown): string[] | undefined {
 
   const items = value.filter(isString);
   return items.length > 0 ? items : undefined;
+}
+
+function normalizeGeneratedAssets(value: unknown, fallbackPaths: string[] | undefined): GeneratedAssetRecord[] | undefined {
+  if (Array.isArray(value)) {
+    const items: GeneratedAssetRecord[] = [];
+    for (const candidate of value) {
+      if (!candidate || typeof candidate !== "object") {
+        continue;
+      }
+
+      const entry = candidate as Record<string, unknown>;
+      if (!isString(entry.relativePath)) {
+        continue;
+      }
+
+      items.push({
+        relativePath: entry.relativePath,
+        contentHash: isString(entry.contentHash) ? entry.contentHash : undefined
+      });
+    }
+
+    if (items.length > 0) {
+      return items;
+    }
+  }
+
+  if (!fallbackPaths || fallbackPaths.length === 0) {
+    return undefined;
+  }
+
+  return fallbackPaths.map((relativePath) => ({ relativePath }));
 }
 
 export function normalizeManifest(rawValue: unknown): SyncManifest {
@@ -46,6 +77,7 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
     const profileId = isSyncProfileId(entry.profileId) ? entry.profileId : getDefaultSyncProfile().id;
     const profile = getSyncProfile(profileId);
     const fileId = isString(entry.fileId) ? entry.fileId : isString(entry.docId) ? entry.docId : undefined;
+    const generatedAssetPaths = toStringArray(entry.generatedAssetPaths);
     if (!fileId || !isString(entry.sourceUrl) || !isString(entry.title) || typeof entry.syncOnOpen !== "boolean") {
       continue;
     }
@@ -60,7 +92,8 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
       title: entry.title,
       syncOnOpen: entry.syncOnOpen,
       resourceKey: isString(entry.resourceKey) ? entry.resourceKey : undefined,
-      generatedAssetPaths: toStringArray(entry.generatedAssetPaths),
+      generatedAssets: normalizeGeneratedAssets(entry.generatedAssets, generatedAssetPaths),
+      generatedAssetPaths,
       lastSyncedAt: isString(entry.lastSyncedAt) ? entry.lastSyncedAt : undefined,
       lastDriveVersion: isString(entry.lastDriveVersion) ? entry.lastDriveVersion : undefined,
       lastLocalHash: isString(entry.lastLocalHash) ? entry.lastLocalHash : undefined

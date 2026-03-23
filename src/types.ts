@@ -10,6 +10,7 @@ export interface LinkedFileEntry {
   resourceKey?: string;
   title: string;
   syncOnOpen: boolean;
+  generatedAssets?: GeneratedAssetRecord[];
   generatedAssetPaths?: string[];
   lastSyncedAt?: string;
   lastDriveVersion?: string;
@@ -100,8 +101,14 @@ export interface SyncOutcome {
   message: string;
 }
 
+export interface GeneratedAssetRecord {
+  relativePath: string;
+  contentHash?: string;
+}
+
 export interface GeneratedMarkdownAsset {
   relativePath: string;
   bytes: Uint8Array;
   mimeType: string;
+  contentHash: string;
 }
