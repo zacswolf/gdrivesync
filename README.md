@@ -6,7 +6,7 @@ One-way Google Docs to Markdown sync for VS Code. Link a Google Doc to a normal 
 
 - Desktop VS Code extension scaffold in TypeScript
 - Google OAuth desktop flow with PKCE and VS Code `SecretStorage`
-- Hosted OAuth bridge flow via `https://gdrivesync.zacswolf.com/oauth/google/bridge`
+- Desktop OAuth uses a localhost loopback callback inside the extension
 - Google Drive export to `text/markdown`
 - Workspace sidecar manifest in `.gdocsync.json`
 - Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
@@ -76,7 +76,6 @@ Required routes:
 
 - `/`
 - `/privacy`
-- `/oauth/google/bridge`
 - `/picker`
 
 No Worker is required for v1.

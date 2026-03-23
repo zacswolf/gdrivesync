@@ -21,10 +21,10 @@ function willExpireSoon(session: StoredOAuthSession): boolean {
   return session.expiresAt <= Date.now() + 60_000;
 }
 
-function buildAuthorizationUrl(config: GoogleReleaseConfig, codeChallenge: string, state: string): string {
+function buildAuthorizationUrl(config: GoogleReleaseConfig, codeChallenge: string, state: string, redirectUri: string): string {
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", config.desktopClientId);
-  url.searchParams.set("redirect_uri", config.oauthBridgeUrl);
+  url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", config.scope);
   url.searchParams.set("access_type", "offline");
@@ -50,13 +50,10 @@ export class GoogleAuthManager {
       "Your Google account is now connected to GDriveSync."
     );
     const nonce = randomUUID();
-    const state = encodeBase64UrlJson({
-      nonce,
-      localRedirect: callbackServer.localRedirect
-    });
+    const state = encodeBase64UrlJson({ nonce });
     const codeVerifier = buildCodeVerifier();
     const codeChallenge = buildCodeChallenge(codeVerifier);
-    const authorizationUrl = buildAuthorizationUrl(config, codeChallenge, state);
+    const authorizationUrl = buildAuthorizationUrl(config, codeChallenge, state, callbackServer.localRedirect);
     const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
     if (!opened) {
       await callbackServer.dispose();
@@ -86,7 +83,13 @@ export class GoogleAuthManager {
       }
 
       const existingSession = await this.tokenStore.get();
-      const nextSession = await this.exchangeAuthorizationCode(code, codeVerifier, config, existingSession?.refreshToken);
+      const nextSession = await this.exchangeAuthorizationCode(
+        code,
+        codeVerifier,
+        callbackServer.localRedirect,
+        config,
+        existingSession?.refreshToken
+      );
       await this.tokenStore.set(nextSession);
     } finally {
       await callbackServer.dispose();
@@ -143,6 +146,7 @@ export class GoogleAuthManager {
   private async exchangeAuthorizationCode(
     code: string,
     codeVerifier: string,
+    redirectUri: string,
     config: GoogleReleaseConfig,
     fallbackRefreshToken?: string
   ): Promise<StoredOAuthSession> {
@@ -151,7 +155,7 @@ export class GoogleAuthManager {
       code,
       code_verifier: codeVerifier,
       grant_type: "authorization_code",
-      redirect_uri: config.oauthBridgeUrl
+      redirect_uri: redirectUri
     });
 
     const response = await this.fetchImpl("https://oauth2.googleapis.com/token", {

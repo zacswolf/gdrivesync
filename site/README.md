@@ -10,6 +10,6 @@ Before deploy:
 2. Confirm the Google web OAuth client includes the Cloudflare Pages production origin
 3. Confirm the consent screen homepage and privacy links point at the deployed site
 
-The OAuth bridge page forwards Google redirect parameters from the hosted domain back to the extension’s localhost listener. The Picker page signs in with the web client, opens Google Picker, and returns the selected doc metadata to the extension.
+The Picker page signs in with the web client, opens Google Picker, and returns the selected doc metadata to the extension. Desktop OAuth happens directly against the extension's localhost callback and does not rely on the hosted site.
 
 For automatic deploys, this repo uses a GitHub Actions workflow that runs `wrangler pages deploy` on pushes to `main`. That matches the rest of your Cloudflare Pages projects, which are already using Direct Upload.

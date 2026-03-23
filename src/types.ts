@@ -32,10 +32,11 @@ export interface StoredOAuthSession {
 
 export interface OAuthStatePayload {
   nonce: string;
-  localRedirect: string;
 }
 
-export interface PickerRequestPayload extends OAuthStatePayload {
+export interface PickerRequestPayload {
+  nonce: string;
+  localRedirect: string;
   hintDocId?: string;
   resourceKey?: string;
 }
