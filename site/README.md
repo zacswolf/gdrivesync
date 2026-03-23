@@ -12,4 +12,4 @@ Before deploy:
 
 The OAuth bridge page forwards Google redirect parameters from the hosted domain back to the extension’s localhost listener. The Picker page signs in with the web client, opens Google Picker, and returns the selected doc metadata to the extension.
 
-For automatic deploys, connect the GitHub repo to Cloudflare Pages instead of using a direct-upload workflow. That gives you auto-deploys on `main` and keeps Pages aligned with the repository as the source of truth.
+For automatic deploys, this repo uses a GitHub Actions workflow that runs `wrangler pages deploy` on pushes to `main`. That matches the rest of your Cloudflare Pages projects, which are already using Direct Upload.

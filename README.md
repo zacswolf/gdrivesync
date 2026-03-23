@@ -70,7 +70,7 @@ Update [site/public/site-config.js](/Users/zacschulwolf/Programming/gdocs_sync_v
 
 Deploy [site/public](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public) as a static site on Cloudflare Pages and bind it to `gdrivesync.zacswolf.com`.
 
-For automatic production deploys on every push to `main`, prefer Cloudflare Pages Git integration after you push this repo to GitHub. The included GitHub Actions workflow is for CI, not for Pages deployment.
+This repo includes a GitHub Actions deploy workflow in [.github/workflows/deploy-pages.yml](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/.github/workflows/deploy-pages.yml). Once the Cloudflare Pages project exists and the `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` secrets are set in GitHub, pushes to `main` will redeploy the site automatically.
 
 Required routes:
 
