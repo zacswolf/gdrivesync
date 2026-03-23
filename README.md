@@ -118,7 +118,8 @@ npm run cli -- export https://docs.google.com/spreadsheets/d/<file-id>/edit ./sh
 ## Current limitations
 
 - One-way sync only: Google files -> local Markdown or CSV
-- `drive.file` access means pasted file IDs may still need one Picker-open round trip
+- The extension now uses `drive.readonly` for one-way sync, so existing local sessions may need a one-time reconnect after upgrades
+- The hosted Picker fallback is still used as a backup if direct pasted-link access fails
 - Formatting fidelity depends on Google’s Markdown export for native Docs, local DOCX conversion for Word files, and local workbook parsing for Sheets/XLSX
 - Spreadsheet sync only supports native Google Sheets and `.xlsx` in v1
 - Linked files must live inside an open VS Code workspace folder

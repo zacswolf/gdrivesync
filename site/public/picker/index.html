@@ -78,7 +78,7 @@
       <button id="continue" type="button" hidden>Continue with Google</button>
     </main>
     <script>
-      const DRIVE_FILE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+      const DRIVE_READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 
       function decodeBase64UrlJson(value) {
         const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
@@ -181,7 +181,7 @@
           const request = parseRequest();
           const tokenClient = google.accounts.oauth2.initTokenClient({
             client_id: googleWebClientId,
-            scope: DRIVE_FILE_SCOPE,
+            scope: DRIVE_READONLY_SCOPE,
             prompt: "",
             login_hint: request.payload.loginHint || undefined,
             callback: (response) => {

@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import { GoogleReleaseConfig, OAuthStatePayload, StoredOAuthSession, TokenStore } from "./types";
 import { decodeBase64UrlJson, encodeBase64UrlJson } from "./utils/base64url";
 import { createLocalCallbackServer } from "./utils/localCallbackServer";
+import { hasRequiredScopes } from "./utils/oauthScopes";
 
 type FetchLike = typeof fetch;
 
@@ -110,11 +111,15 @@ export class GoogleAuthManager {
   }
 
   async ensureSignedIn(): Promise<void> {
+    const config = this.configProvider();
     const session = await this.tokenStore.get();
-    if (session) {
+    if (session && hasRequiredScopes(session.scope, config.scope)) {
       return;
     }
 
+    if (session) {
+      await this.tokenStore.delete();
+    }
     await this.signIn();
   }
 
@@ -123,6 +128,11 @@ export class GoogleAuthManager {
     const session = await this.tokenStore.get();
     if (!session) {
       throw new Error("You need to sign in to Google before syncing.");
+    }
+
+    if (!hasRequiredScopes(session.scope, config.scope)) {
+      await this.tokenStore.delete();
+      throw new Error("Your saved Google session is missing the required Drive read-only scope. Please sign in again.");
     }
 
     if (!willExpireSoon(session)) {
@@ -201,7 +211,7 @@ export class GoogleAuthManager {
       accessToken: payload.access_token,
       refreshToken: payload.refresh_token || fallbackRefreshToken,
       expiresAt: Date.now() + payload.expires_in * 1000,
-      scope: payload.scope,
+      scope: payload.scope || config.scope,
       tokenType: payload.token_type
     };
   }
@@ -240,7 +250,7 @@ export class GoogleAuthManager {
       accessToken: payload.access_token,
       refreshToken: session.refreshToken,
       expiresAt: Date.now() + payload.expires_in * 1000,
-      scope: payload.scope,
+      scope: payload.scope || session.scope,
       tokenType: payload.token_type
     };
   }

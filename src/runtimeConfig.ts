@@ -6,7 +6,7 @@ import * as vscode from "vscode";
 import { GoogleReleaseConfig } from "./types";
 
 const DEFAULT_HOSTED_BASE_URL = "https://gdrivesync.zacswolf.com";
-const DEFAULT_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DEFAULT_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const DEFAULT_DESKTOP_CLIENT_ID = "532481685126-bjdbo5o6924bh41314la7s6ph4n02s62.apps.googleusercontent.com";
 
 function parseDotEnvValue(rawValue: string): string {

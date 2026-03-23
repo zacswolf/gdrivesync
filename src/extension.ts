@@ -254,7 +254,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (error) {
       if (error instanceof PickerGrantRequiredError) {
         void vscode.window.showInformationMessage(
-          `Google needs one browser grant for that ${getSelectionSourceLabel(allowedProfiles)} before drive.file access is available.`
+          `Google needs one browser confirmation for that ${getSelectionSourceLabel(allowedProfiles)} before it can be linked.`
         );
         const pickedFile = await pickerClient.pickDocument(pickerOptions, parsedInput);
         return pickedFile ? resolveSelectionFromInput(pickedFile, allowedProfiles) : undefined;
