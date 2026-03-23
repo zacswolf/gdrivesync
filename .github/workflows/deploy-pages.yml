@@ -26,4 +26,5 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
-          command: pages deploy site/public --project-name=gdrivesync
+          wranglerVersion: "4.76.0"
+          command: pages deploy site/public --project-name=gdrivesync --commit-dirty=true
