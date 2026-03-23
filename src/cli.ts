@@ -3,24 +3,55 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 
+import { CliManifestStore } from "./cliManifestStore";
+import { CliSyncManager } from "./cliSync";
 import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { loadDevelopmentEnv, resolveCliGoogleConfig } from "./runtimeConfig";
-import { getSupportedSourceMimeTypes, resolveSyncProfileForMimeType } from "./syncProfiles";
+import { resolveSyncProfileForMimeType } from "./syncProfiles";
 import { FileTokenStore } from "./tokenStores";
+import { buildCliSyncAllSummary } from "./utils/cliSyncSummary";
 import { parseGoogleDocInput } from "./utils/docUrl";
-import { convertDocxToMarkdown } from "./docxConverter";
-import { parseWorkbookToCsvOutput } from "./workbookCsv";
+import { fromManifestKey } from "./utils/paths";
+
+interface CliFlags {
+  json: boolean;
+  all: boolean;
+  force: boolean;
+  removeGenerated: boolean;
+  cwd?: string;
+}
+
+interface ParsedCliInput {
+  command: string;
+  subcommand?: string;
+  args: string[];
+  flags: CliFlags;
+}
 
 function printUsage(): void {
   process.stdout.write(`Usage:
-  gdrivesync sign-in
-  gdrivesync sign-out
-  gdrivesync inspect <google-file-url-or-id>
-  gdrivesync metadata <google-file-url-or-id>
+  gdrivesync auth login
+  gdrivesync auth logout
+  gdrivesync auth status [--json]
+  gdrivesync inspect <google-file-url-or-id> [--json]
+  gdrivesync metadata <google-file-url-or-id> [--json]
   gdrivesync export <google-file-url-or-id> [output-path] [--json]
+  gdrivesync link <google-file-url-or-id> <local-path> [--cwd path] [--json] [--force]
+  gdrivesync status <local-path> [--cwd path] [--json]
+  gdrivesync status --all [--cwd path] [--json]
+  gdrivesync sync <local-path> [--cwd path] [--json] [--force]
+  gdrivesync sync --all [--cwd path] [--json] [--force]
+  gdrivesync unlink <local-path> [--cwd path] [--json] [--remove-generated]
+
+Flags:
+  --json              Emit machine-readable JSON
+  --cwd <path>        Workspace root to use for manifest operations
+  --all               Target every linked file in the manifest
+  --force             Overwrite local changes during sync
+  --remove-generated  Remove tracked generated files when unlinking
 `);
 }
 
@@ -43,168 +74,431 @@ function openExternalUrl(url: string): Promise<boolean> {
   });
 }
 
+function parseCliInput(rawArgs: string[]): ParsedCliInput {
+  const flags: CliFlags = {
+    json: false,
+    all: false,
+    force: false,
+    removeGenerated: false
+  };
+  const positionals: string[] = [];
+
+  for (let index = 0; index < rawArgs.length; index += 1) {
+    const arg = rawArgs[index];
+    if (arg === "--json") {
+      flags.json = true;
+      continue;
+    }
+    if (arg === "--all") {
+      flags.all = true;
+      continue;
+    }
+    if (arg === "--force" || arg === "--yes") {
+      flags.force = true;
+      continue;
+    }
+    if (arg === "--remove-generated") {
+      flags.removeGenerated = true;
+      continue;
+    }
+    if (arg === "--cwd") {
+      const value = rawArgs[index + 1];
+      if (!value) {
+        throw new Error("--cwd requires a path.");
+      }
+      flags.cwd = value;
+      index += 1;
+      continue;
+    }
+
+    positionals.push(arg);
+  }
+
+  const [command, maybeSubcommand, ...rest] = positionals;
+  if (!command) {
+    return {
+      command: "",
+      args: [],
+      flags
+    };
+  }
+
+  if (command === "auth") {
+    return {
+      command,
+      subcommand: maybeSubcommand,
+      args: rest,
+      flags
+    };
+  }
+
+  return {
+    command,
+    args: [maybeSubcommand, ...rest].filter((value): value is string => Boolean(value)),
+    flags
+  };
+}
+
+function printJson(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function printText(value: string): void {
+  process.stdout.write(`${value}\n`);
+}
+
+function markFailure(): void {
+  process.exitCode = 1;
+}
+
+function resolveWorkspaceRoot(cwdFlag: string | undefined): string {
+  return path.resolve(cwdFlag || process.cwd());
+}
+
+function resolveLocalPath(rootPath: string, filePath: string): string {
+  return path.resolve(rootPath, filePath);
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await stat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function describeLinkedFile(manifestStore: CliManifestStore, filePath: string): Promise<Record<string, unknown>> {
+  const linkedFile = await manifestStore.getLinkedFile(filePath);
+  if (!linkedFile) {
+    return {
+      linked: false,
+      targetPath: path.resolve(filePath)
+    };
+  }
+
+  const primaryPath = fromManifestKey(linkedFile.folderPath, linkedFile.key);
+  const generatedFiles = linkedFile.entry.generatedFiles || linkedFile.entry.generatedFilePaths || [];
+
+  return {
+    linked: true,
+    targetPath: path.resolve(filePath),
+    primaryPath,
+    matchedOutputKind: linkedFile.matchedOutputKind,
+    manifestPath: linkedFile.manifestPath,
+    manifestKey: linkedFile.key,
+    fileExists: await pathExists(filePath),
+    entry: {
+      profileId: linkedFile.entry.profileId,
+      title: linkedFile.entry.title,
+      sourceUrl: linkedFile.entry.sourceUrl,
+      sourceMimeType: linkedFile.entry.sourceMimeType,
+      localFormat: linkedFile.entry.localFormat,
+      outputKind: linkedFile.entry.outputKind,
+      syncOnOpen: linkedFile.entry.syncOnOpen,
+      lastSyncedAt: linkedFile.entry.lastSyncedAt,
+      lastDriveVersion: linkedFile.entry.lastDriveVersion,
+      generatedFileCount: generatedFiles.length
+    }
+  };
+}
+
 async function main(): Promise<void> {
   await loadDevelopmentEnv(process.cwd());
 
-  const rawArgs = process.argv.slice(2);
-  const jsonOutput = rawArgs.includes("--json");
-  const args = rawArgs.filter((arg) => arg !== "--json");
-  const [command, ...commandArgs] = args;
-  if (!command) {
+  const parsed = parseCliInput(process.argv.slice(2));
+  if (!parsed.command) {
     printUsage();
     return;
   }
 
-  const authManager = new GoogleAuthManager(
-    new FileTokenStore(path.join(os.homedir(), ".gdrivesync-dev-session.json")),
-    resolveCliGoogleConfig,
-    openExternalUrl
-  );
+  const tokenStore = new FileTokenStore(path.join(os.homedir(), ".gdrivesync-dev-session.json"));
+  const authManager = new GoogleAuthManager(tokenStore, resolveCliGoogleConfig, openExternalUrl);
   const driveClient = new DriveClient();
+  const workspaceRoot = resolveWorkspaceRoot(parsed.flags.cwd);
+  const manifestStore = new CliManifestStore(workspaceRoot);
+  const syncManager = new CliSyncManager(authManager, driveClient, manifestStore);
 
-  if (command === "sign-in") {
+  if (parsed.command === "auth") {
+    if (parsed.subcommand === "login") {
+      await authManager.signIn();
+      if (parsed.flags.json) {
+        printJson({ authenticated: true });
+      } else {
+        printText("Signed in.");
+      }
+      return;
+    }
+    if (parsed.subcommand === "logout") {
+      await authManager.signOut();
+      if (parsed.flags.json) {
+        printJson({ authenticated: false });
+      } else {
+        printText("Signed out.");
+      }
+      return;
+    }
+    if (parsed.subcommand === "status") {
+      const session = await tokenStore.get();
+      const payload = session
+        ? {
+            authenticated: true,
+            expiresAt: new Date(session.expiresAt).toISOString(),
+            expiresInSeconds: Math.max(0, Math.floor((session.expiresAt - Date.now()) / 1000)),
+            scope: session.scope,
+            refreshTokenPresent: Boolean(session.refreshToken)
+          }
+        : {
+            authenticated: false
+          };
+      if (parsed.flags.json) {
+        printJson(payload);
+      } else {
+        printText(payload.authenticated ? `Signed in. Scope: ${payload.scope}` : "Not signed in.");
+      }
+      return;
+    }
+
+    throw new Error("Use one of: auth login, auth logout, auth status");
+  }
+
+  if (parsed.command === "sign-in") {
     await authManager.signIn();
-    process.stdout.write("Signed in.\n");
+    printText("Signed in.");
     return;
   }
 
-  if (command === "sign-out") {
+  if (parsed.command === "sign-out") {
     await authManager.signOut();
-    process.stdout.write("Signed out.\n");
+    printText("Signed out.");
     return;
   }
 
-  const rawInput = commandArgs[0];
-  const parsedInput = rawInput ? parseGoogleDocInput(rawInput) : undefined;
-  if (!parsedInput) {
-    throw new Error("Pass a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or raw file ID.");
+  if (parsed.command === "inspect" || parsed.command === "metadata") {
+    const rawInput = parsed.args[0];
+    const parsedInput = rawInput ? parseGoogleDocInput(rawInput) : undefined;
+    if (!parsedInput) {
+      throw new Error("Pass a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or raw file ID.");
+    }
+
+    const accessToken = await authManager.getAccessToken();
+    const metadata = await driveClient.getFileMetadata(accessToken, {
+      fileId: parsedInput.fileId,
+      resourceKey: parsedInput.resourceKey,
+      expectedMimeTypes: undefined,
+      sourceTypeLabel: "Google file"
+    });
+    const syncProfile = resolveSyncProfileForMimeType(metadata.mimeType);
+    if (parsed.command === "metadata") {
+      printJson(metadata);
+      return;
+    }
+
+    printJson({
+      fileId: metadata.id,
+      title: metadata.name,
+      sourceMimeType: metadata.mimeType,
+      sourceUrl: metadata.webViewLink || syncProfile?.buildSourceUrl(metadata.id) || parsedInput.sourceUrl,
+      profileId: syncProfile?.id,
+      sourceTypeLabel: syncProfile?.sourceTypeLabel,
+      targetFamily: syncProfile?.targetFamily,
+      targetFileExtension: syncProfile?.targetFileExtension,
+      retrievalMode: syncProfile?.retrievalMode
+    });
+    return;
   }
 
-  const accessToken = await authManager.getAccessToken();
-  const metadata = await driveClient.getFileMetadata(accessToken, {
-    fileId: parsedInput.fileId,
-    resourceKey: parsedInput.resourceKey,
-    expectedMimeTypes: getSupportedSourceMimeTypes(),
-    sourceTypeLabel: "supported Google file"
-  });
-  const syncProfile = resolveSyncProfileForMimeType(metadata.mimeType);
-  if (!syncProfile) {
-    throw new Error(`Unsupported Google file type: ${metadata.mimeType}`);
-  }
+  if (parsed.command === "export") {
+    const [rawInput, outputPath] = parsed.args;
+    if (!rawInput) {
+      throw new Error("export requires a Google file URL or ID.");
+    }
 
-  if (command === "metadata" || command === "inspect") {
-    process.stdout.write(
-      `${JSON.stringify(
-        {
-          fileId: metadata.id,
-          title: metadata.name,
-          sourceMimeType: metadata.mimeType,
-          sourceUrl: metadata.webViewLink || syncProfile.buildSourceUrl(metadata.id),
-          profileId: syncProfile.id,
-          sourceTypeLabel: syncProfile.sourceTypeLabel,
-          targetFamily: syncProfile.targetFamily,
-          targetFileExtension: syncProfile.targetFileExtension,
-          retrievalMode: syncProfile.retrievalMode
-        },
-        null,
-        2
-      )}\n`
+    const parsedInput = parseGoogleDocInput(rawInput);
+    if (!parsedInput) {
+      throw new Error("Pass a Google Docs, Sheets, Drive, DOCX, or XLSX file URL or raw file ID.");
+    }
+
+    const accessToken = await authManager.getAccessToken();
+    const metadata = await driveClient.getFileMetadata(accessToken, {
+      fileId: parsedInput.fileId,
+      resourceKey: parsedInput.resourceKey,
+      expectedMimeTypes: undefined,
+      sourceTypeLabel: "Google file"
+    });
+    const syncProfile = resolveSyncProfileForMimeType(metadata.mimeType);
+    if (!syncProfile) {
+      throw new Error("This Google file is not supported for export.");
+    }
+
+    const resolvedOutputPath = outputPath ? resolveLocalPath(workspaceRoot, outputPath) : undefined;
+    if (resolvedOutputPath) {
+      const extension = path.extname(resolvedOutputPath).toLowerCase();
+      if (syncProfile.targetFamily === "markdown" && extension !== ".md") {
+        throw new Error("Markdown exports must target a .md path.");
+      }
+      if (syncProfile.targetFamily === "csv" && extension !== ".csv") {
+        throw new Error("Spreadsheet exports must target a .csv path.");
+      }
+    }
+
+    const exportResult = await syncManager.exportSelection(
+      {
+        profileId: syncProfile.id,
+        fileId: metadata.id,
+        title: metadata.name,
+        sourceUrl: metadata.webViewLink || syncProfile.buildSourceUrl(metadata.id),
+        sourceMimeType: metadata.mimeType,
+        resourceKey: metadata.resourceKey || parsedInput.resourceKey
+      },
+      {
+        targetPath: resolvedOutputPath
+      }
     );
+
+    if (!resolvedOutputPath) {
+      if (exportResult.primaryText === undefined) {
+        throw new Error("This export did not produce a single text output.");
+      }
+      if (parsed.flags.json) {
+        printJson({
+          outputKind: exportResult.outputKind,
+          text: exportResult.primaryText
+        });
+      } else {
+        process.stdout.write(exportResult.primaryText);
+      }
+      return;
+    }
+
+    if (parsed.flags.json) {
+      printJson({
+        targetPath: resolvedOutputPath,
+        outputKind: exportResult.outputKind,
+        message: exportResult.message,
+        writtenPaths: exportResult.writtenPaths,
+        generatedDirectoryPath: exportResult.generatedDirectoryPath
+      });
+    } else {
+      printText(exportResult.message);
+    }
     return;
   }
 
-  if (command === "export") {
-    const outputPath = commandArgs[1];
-    if (syncProfile.targetFamily === "csv") {
-      const workbookBytes =
-        syncProfile.retrievalMode === "drive-export-xlsx"
-          ? await driveClient.exportFile(accessToken, parsedInput.fileId, syncProfile.exportMimeType, parsedInput.resourceKey)
-          : await driveClient.downloadFile(accessToken, parsedInput.fileId, parsedInput.resourceKey);
-      const workbookOutput = parseWorkbookToCsvOutput(outputPath || `${metadata.name}.csv`, workbookBytes);
-      if (!outputPath) {
-        if (workbookOutput.outputKind === "directory") {
-          throw new Error("Pass an output path when exporting a spreadsheet with multiple visible worksheets.");
-        }
+  if (parsed.command === "link") {
+    const [rawInput, localPathArg] = parsed.args;
+    if (!rawInput || !localPathArg) {
+      throw new Error("link requires a Google file URL or ID and a local target path.");
+    }
 
-        process.stdout.write(workbookOutput.primaryFileText || "");
-        return;
-      }
+    const localPath = resolveLocalPath(workspaceRoot, localPathArg);
+    const selection = await syncManager.resolveSelectionFromInput(rawInput, localPath);
+    const outcome = await syncManager.linkFile(localPath, selection, { force: parsed.flags.force });
+    if (parsed.flags.json) {
+      printJson({
+        targetPath: localPath,
+        manifestPath: manifestStore.getManifestPath(),
+        outcome
+      });
+    } else {
+      printText(outcome.message);
+    }
+    if (outcome.status === "cancelled") {
+      markFailure();
+    }
+    return;
+  }
 
-      if (workbookOutput.outputKind === "file") {
-        await writeFile(outputPath, workbookOutput.primaryFileText || "", "utf8");
-        if (jsonOutput) {
-          process.stdout.write(
-            `${JSON.stringify(
-              {
-                status: "written",
-                outputKind: "file",
-                path: outputPath,
-                visibleSheetCount: workbookOutput.visibleSheetCount
-              },
-              null,
-              2
-            )}\n`
-          );
-        } else {
-          process.stdout.write(`Wrote ${outputPath}\n`);
-        }
-        return;
-      }
-
-      const outputDirectory = path.dirname(outputPath);
-      const writtenFiles: string[] = [];
-      for (const generatedFile of workbookOutput.generatedFiles) {
-        const absolutePath = path.join(outputDirectory, ...generatedFile.relativePath.split("/"));
-        await mkdir(path.dirname(absolutePath), { recursive: true });
-        await writeFile(absolutePath, Buffer.from(generatedFile.bytes));
-        writtenFiles.push(absolutePath);
-      }
-      const generatedDirectory = path.join(outputDirectory, path.parse(outputPath).name);
-      if (jsonOutput) {
-        process.stdout.write(
-          `${JSON.stringify(
-            {
-              status: "written",
-              outputKind: "directory",
-              path: generatedDirectory,
-              visibleSheetCount: workbookOutput.visibleSheetCount,
-              writtenFiles
-            },
-            null,
-            2
-          )}\n`
-        );
+  if (parsed.command === "status") {
+    if (parsed.flags.all) {
+      const linkedFiles = await manifestStore.listLinkedFiles();
+      const files = await Promise.all(linkedFiles.map((item) => describeLinkedFile(manifestStore, item.filePath)));
+      if (parsed.flags.json) {
+        printJson({
+          rootPath: workspaceRoot,
+          manifestPath: manifestStore.getManifestPath(),
+          count: files.length,
+          files
+        });
       } else {
-        process.stdout.write(`Wrote ${generatedDirectory}\n`);
+        printText(`${files.length} linked files in ${manifestStore.getManifestPath()}`);
       }
       return;
     }
 
-    const markdown =
-      syncProfile.retrievalMode === "drive-download-docx"
-        ? await convertDocxToMarkdown(await driveClient.downloadFile(accessToken, parsedInput.fileId, parsedInput.resourceKey))
-        : await driveClient.exportText(accessToken, parsedInput.fileId, syncProfile.exportMimeType, parsedInput.resourceKey);
-    if (outputPath) {
-      await writeFile(outputPath, markdown, "utf8");
-      if (jsonOutput) {
-        process.stdout.write(
-          `${JSON.stringify(
-            {
-              status: "written",
-              outputKind: "file",
-              path: outputPath
-            },
-            null,
-            2
-          )}\n`
-        );
+    const localPathArg = parsed.args[0];
+    if (!localPathArg) {
+      throw new Error("status requires a local path or --all.");
+    }
+    const localPath = resolveLocalPath(workspaceRoot, localPathArg);
+    const status = await describeLinkedFile(manifestStore, localPath);
+    if (parsed.flags.json) {
+      printJson(status);
+    } else {
+      printText(
+        status.linked
+          ? `Linked: ${String((status as { entry?: { title?: string } }).entry?.title || localPath)}`
+          : `Not linked: ${localPath}`
+      );
+    }
+    return;
+  }
+
+  if (parsed.command === "sync") {
+    if (parsed.flags.all) {
+      const summary = await syncManager.syncAll({ force: parsed.flags.force });
+      if (parsed.flags.json) {
+        printJson({
+          rootPath: workspaceRoot,
+          manifestPath: manifestStore.getManifestPath(),
+          ...summary
+        });
       } else {
-        process.stdout.write(`Wrote ${outputPath}\n`);
+        printText(buildCliSyncAllSummary(summary));
+      }
+      if (summary.cancelledCount > 0 || summary.failedCount > 0) {
+        markFailure();
       }
       return;
     }
 
-    process.stdout.write(markdown);
+    const localPathArg = parsed.args[0];
+    if (!localPathArg) {
+      throw new Error("sync requires a local path or --all.");
+    }
+    const localPath = resolveLocalPath(workspaceRoot, localPathArg);
+    const outcome = await syncManager.syncFile(localPath, { force: parsed.flags.force });
+    if (parsed.flags.json) {
+      printJson({
+        targetPath: localPath,
+        outcome
+      });
+    } else {
+      printText(outcome.message);
+    }
+    if (outcome.status === "cancelled") {
+      markFailure();
+    }
+    return;
+  }
+
+  if (parsed.command === "unlink") {
+    const localPathArg = parsed.args[0];
+    if (!localPathArg) {
+      throw new Error("unlink requires a local path.");
+    }
+    const localPath = resolveLocalPath(workspaceRoot, localPathArg);
+    const removed = await syncManager.unlinkFile(localPath, {
+      removeGeneratedFiles: parsed.flags.removeGenerated
+    });
+    if (parsed.flags.json) {
+      printJson({
+        targetPath: localPath,
+        removed
+      });
+    } else {
+      printText(removed ? `Unlinked ${localPath}` : `No linked file found for ${localPath}`);
+    }
     return;
   }
 
@@ -212,6 +506,15 @@ async function main(): Promise<void> {
 }
 
 void main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  const message = error instanceof Error ? error.message : String(error);
+  if (process.argv.slice(2).includes("--json")) {
+    printJson({
+      error: {
+        message
+      }
+    });
+  } else {
+    process.stderr.write(`${message}\n`);
+  }
   process.exitCode = 1;
 });

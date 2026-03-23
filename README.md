@@ -20,8 +20,9 @@ Agent-friendly qualities:
 - OAuth-backed access instead of brittle browser scraping
 - stable local outputs: Markdown and CSV
 - direct export to stdout for single-file workflows
-- machine-readable `inspect` output
-- optional JSON export summaries when writing files
+- first-class manifest-aware `link`, `status`, `sync`, and `unlink` commands
+- machine-readable `inspect`, `status`, `sync`, and `export` output with `--json`
+- explicit workspace targeting with `--cwd`
 - predictable spreadsheet shape switching:
   - one visible sheet -> `report.csv`
   - multiple visible sheets -> `report/<sheet>.csv`
@@ -39,7 +40,7 @@ Agent-friendly qualities:
 - Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
-- Agent-friendly CLI entrypoint with inspect/export flows
+- Agent-friendly CLI entrypoint with auth, inspect, export, link, status, sync, and unlink flows
 - Internal sync profiles so Docs/DOCX can share one Markdown flow and Sheets/XLSX can share one CSV flow
 - Automatic spreadsheet shape switching:
   - one visible sheet -> `report.csv`
@@ -130,26 +131,49 @@ No Worker is required for v1.
 
 ## CLI
 
-The CLI is now an important part of the product, especially for agent workflows.
+The CLI is a core interface for this project, not a sidecar dev script.
 
-Current strengths:
-- inspect a Drive file and get machine-readable output
-- export a supported file directly to stdout
-- export to a local Markdown file
-- export spreadsheets to a single CSV or a generated folder of CSVs
-- return JSON write summaries when `--json` is used with file exports
+Current command set:
+
+```bash
+gdrivesync auth login
+gdrivesync auth logout
+gdrivesync auth status [--json]
+gdrivesync inspect <google-file-url-or-id> [--json]
+gdrivesync metadata <google-file-url-or-id> [--json]
+gdrivesync export <google-file-url-or-id> [output-path] [--json]
+gdrivesync link <google-file-url-or-id> <local-path> [--cwd path] [--json] [--force]
+gdrivesync status <local-path> [--cwd path] [--json]
+gdrivesync status --all [--cwd path] [--json]
+gdrivesync sync <local-path> [--cwd path] [--json] [--force]
+gdrivesync sync --all [--cwd path] [--json] [--force]
+gdrivesync unlink <local-path> [--cwd path] [--json] [--remove-generated]
+```
+
+Key CLI behaviors:
+- `link` immediately creates the manifest entry and runs an initial sync
+- `status --all --json` returns manifest-aware file metadata for the whole workspace
+- `sync --all --json` returns per-file results with `synced`, `skipped`, `cancelled`, or `failed`
+- `sync` and `link` return a non-zero exit code when they are cancelled or fail
+- top-level command failures stay machine-readable in `--json` mode
+- `export` writes to stdout when no output path is given, and writes files when one is provided
 
 Examples:
 
 ```bash
-npm run cli -- sign-in
-npm run cli -- inspect https://docs.google.com/document/d/<file-id>/edit
-npm run cli -- export https://drive.google.com/file/d/<file-id>/view ./file.md
-npm run cli -- export https://docs.google.com/spreadsheets/d/<file-id>/edit ./sheet.csv
+npm run cli -- auth login
+npm run cli -- auth status --json
+npm run cli -- inspect https://docs.google.com/document/d/<file-id>/edit --json
+npm run cli -- export https://docs.google.com/document/d/<file-id>/edit
 npm run cli -- export https://docs.google.com/spreadsheets/d/<file-id>/edit ./sheet.csv --json
+npm run cli -- link https://docs.google.com/document/d/<file-id>/edit ./notes/spec.md --cwd ./data --json
+npm run cli -- status --all --cwd ./data --json
+npm run cli -- sync ./notes/spec.md --cwd ./data --json
+npm run cli -- sync --all --cwd ./data --json
+npm run cli -- unlink ./notes/spec.md --cwd ./data --json
 ```
 
-Example `inspect` output shape:
+Example `inspect` output:
 
 ```json
 {
@@ -165,11 +189,43 @@ Example `inspect` output shape:
 }
 ```
 
-Near-term CLI roadmap:
-- stable top-level `gdrivesync` install path for package managers
-- more explicit JSON modes for scripting
-- better batch/export ergonomics for agent runs
-- clearer auth/session diagnostics
+Example `sync --all --json` output shape:
+
+```json
+{
+  "rootPath": "/workspace/data",
+  "manifestPath": "/workspace/data/.gdrivesync.json",
+  "results": [
+    {
+      "file": "/workspace/data/spec.md",
+      "outcome": {
+        "status": "synced",
+        "message": "Synced spec.md."
+      }
+    },
+    {
+      "file": "/workspace/data/report.csv",
+      "outcome": {
+        "status": "skipped",
+        "message": "Remote version unchanged."
+      }
+    }
+  ],
+  "syncedCount": 1,
+  "skippedCount": 1,
+  "cancelledCount": 0,
+  "failedCount": 0
+}
+```
+
+If you are building agent integrations, prefer:
+- `--json` for anything you plan to parse
+- `--cwd` instead of relying on implicit working-directory state
+- `export` for ephemeral reads
+- `link` + `sync` for durable workspace state
+- `status --all --json` before `sync --all --json` when you want to reason about what will be touched
+
+There is also a short agent-focused usage guide in [docs/agent-cli.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/agent-cli.md).
 
 ## Distribution plans
 
