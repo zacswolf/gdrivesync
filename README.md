@@ -1,6 +1,30 @@
 # GDriveSync for VS Code
 
-One-way Google Drive file sync for VS Code. Link a Google Doc or DOCX file to a normal `.md` file, or a Google Sheet or `.xlsx` file to local `.csv` output, then sync on demand or when the file opens.
+GDriveSync is a Google Drive to local-file bridge for humans and agents.
+
+Use it in VS Code when you want linked files that stay native to your workspace. Use the CLI when you want an agent-safe way to inspect and export Google Docs, DOCX, Google Sheets, and XLSX into normal Markdown or CSV outputs.
+
+Core flows:
+- Google Docs -> `.md`
+- DOCX in Drive -> `.md`
+- Google Sheets -> `.csv` or `folder-of-csvs`
+- XLSX in Drive -> `.csv` or `folder-of-csvs`
+
+The project is one-way by design: Google Drive is the source of truth.
+
+## Why this matters for agents
+
+Most agents still integrate through CLIs, not editor extensions. GDriveSync is useful there because it gives agents a clean bridge from Google Drive into normal local files they already know how to read and edit.
+
+Agent-friendly qualities:
+- OAuth-backed access instead of brittle browser scraping
+- stable local outputs: Markdown and CSV
+- direct export to stdout for single-file workflows
+- machine-readable `inspect` output
+- optional JSON export summaries when writing files
+- predictable spreadsheet shape switching:
+  - one visible sheet -> `report.csv`
+  - multiple visible sheets -> `report/<sheet>.csv`
 
 ## What is implemented
 
@@ -15,7 +39,7 @@ One-way Google Drive file sync for VS Code. Link a Google Doc or DOCX file to a 
 - Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
-- Thin CLI harness for local auth/export testing
+- Agent-friendly CLI entrypoint with inspect/export flows
 - Internal sync profiles so Docs/DOCX can share one Markdown flow and Sheets/XLSX can share one CSV flow
 - Automatic spreadsheet shape switching:
   - one visible sheet -> `report.csv`
@@ -106,14 +130,55 @@ No Worker is required for v1.
 
 ## CLI
 
-The CLI is for development and debugging, not for end users.
+The CLI is now an important part of the product, especially for agent workflows.
+
+Current strengths:
+- inspect a Drive file and get machine-readable output
+- export a supported file directly to stdout
+- export to a local Markdown file
+- export spreadsheets to a single CSV or a generated folder of CSVs
+- return JSON write summaries when `--json` is used with file exports
+
+Examples:
 
 ```bash
 npm run cli -- sign-in
-npm run cli -- metadata https://docs.google.com/document/d/<file-id>/edit
+npm run cli -- inspect https://docs.google.com/document/d/<file-id>/edit
 npm run cli -- export https://drive.google.com/file/d/<file-id>/view ./file.md
 npm run cli -- export https://docs.google.com/spreadsheets/d/<file-id>/edit ./sheet.csv
+npm run cli -- export https://docs.google.com/spreadsheets/d/<file-id>/edit ./sheet.csv --json
 ```
+
+Example `inspect` output shape:
+
+```json
+{
+  "fileId": "abc123",
+  "title": "Quarterly Planning",
+  "sourceMimeType": "application/vnd.google-apps.spreadsheet",
+  "sourceUrl": "https://docs.google.com/spreadsheets/d/abc123/edit",
+  "profileId": "google-sheet-csv",
+  "sourceTypeLabel": "Spreadsheet",
+  "targetFamily": "csv",
+  "targetFileExtension": "csv",
+  "retrievalMode": "drive-export-xlsx"
+}
+```
+
+Near-term CLI roadmap:
+- stable top-level `gdrivesync` install path for package managers
+- more explicit JSON modes for scripting
+- better batch/export ergonomics for agent runs
+- clearer auth/session diagnostics
+
+## Distribution plans
+
+Planned distribution targets:
+- VS Code Marketplace
+- Open VSX
+- Homebrew
+
+Publishing a short best-practices doc for agent usage is not dumb at all. It is probably a very good idea once the CLI surface settles a bit, because that is how other agent builders will actually discover the right workflows.
 
 ## Current limitations
 

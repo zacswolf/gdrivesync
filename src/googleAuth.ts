@@ -1,8 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { URLSearchParams } from "node:url";
 
-import * as vscode from "vscode";
-
 import { GoogleReleaseConfig, OAuthStatePayload, StoredOAuthSession, TokenStore } from "./types";
 import { decodeBase64UrlJson, encodeBase64UrlJson } from "./utils/base64url";
 import { createLocalCallbackServer } from "./utils/localCallbackServer";
@@ -48,6 +46,7 @@ export class GoogleAuthManager {
   constructor(
     private readonly tokenStore: TokenStore,
     private readonly configProvider: () => GoogleReleaseConfig,
+    private readonly openExternalUrl: (url: string) => Promise<boolean>,
     private readonly fetchImpl: FetchLike = fetch
   ) {}
 
@@ -63,7 +62,7 @@ export class GoogleAuthManager {
     const codeVerifier = buildCodeVerifier();
     const codeChallenge = buildCodeChallenge(codeVerifier);
     const authorizationUrl = buildAuthorizationUrl(config, codeChallenge, state, callbackServer.localRedirect);
-    const opened = await vscode.env.openExternal(vscode.Uri.parse(authorizationUrl));
+    const opened = await this.openExternalUrl(authorizationUrl);
     if (!opened) {
       await callbackServer.dispose();
       throw new Error("VS Code could not open your browser for Google sign-in.");

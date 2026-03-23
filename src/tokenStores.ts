@@ -1,14 +1,14 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import * as vscode from "vscode";
+import type { SecretStorage } from "vscode";
 
 import { StoredOAuthSession, TokenStore } from "./types";
 
 const SECRET_STORAGE_KEY = "gdocSync.googleOAuthSession";
 
 export class SecretStorageTokenStore implements TokenStore {
-  constructor(private readonly secrets: vscode.SecretStorage) {}
+  constructor(private readonly secrets: SecretStorage) {}
 
   async get(): Promise<StoredOAuthSession | undefined> {
     const rawValue = await this.secrets.get(SECRET_STORAGE_KEY);

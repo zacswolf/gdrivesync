@@ -6,7 +6,7 @@ import { DriveClient, PickerGrantRequiredError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { PickerClient } from "./pickerClient";
-import { assertDesktopClientConfigured, loadDevelopmentEnv, resolveExtensionGoogleConfig } from "./runtimeConfig";
+import { assertDesktopClientConfigured, loadDevelopmentEnv, resolveGoogleConfigFromValues } from "./runtimeConfig";
 import {
   getSupportedSourceMimeTypes,
   getSupportedSyncProfiles,
@@ -96,8 +96,22 @@ async function promptForGoogleFileInput(): Promise<ParsedDocInput | undefined> {
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   await loadDevelopmentEnv(context.extensionPath);
 
+  function resolveExtensionGoogleConfig() {
+    const config = vscode.workspace.getConfiguration("gdocSync");
+    return resolveGoogleConfigFromValues({
+      desktopClientId: config.get<string>("development.desktopClientId") || undefined,
+      desktopClientSecret: config.get<string>("development.desktopClientSecret") || undefined,
+      hostedBaseUrl: config.get<string>("development.hostedBaseUrl") || undefined,
+      loginHint: config.get<string>("development.loginHint") || undefined
+    });
+  }
+
   const manifestStore = new ManifestStore();
-  const authManager = new GoogleAuthManager(new SecretStorageTokenStore(context.secrets), resolveExtensionGoogleConfig);
+  const authManager = new GoogleAuthManager(
+    new SecretStorageTokenStore(context.secrets),
+    resolveExtensionGoogleConfig,
+    async (url) => vscode.env.openExternal(vscode.Uri.parse(url))
+  );
   const driveClient = new DriveClient();
   const pickerClient = new PickerClient(resolveExtensionGoogleConfig);
   const syncManager = new SyncManager(authManager, driveClient, manifestStore);

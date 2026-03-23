@@ -1,8 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
-import * as vscode from "vscode";
-
 import { GoogleReleaseConfig } from "./types";
 
 const DEFAULT_HOSTED_BASE_URL = "https://gdrivesync.zacswolf.com";
@@ -75,48 +73,35 @@ function normalizeBaseUrl(rawValue: string | undefined): string {
   return url.toString().replace(/\/$/, "");
 }
 
-function buildConfig(
-  desktopClientId: string,
-  hostedBaseUrlOverride?: string,
-  desktopClientSecret?: string,
-  loginHint?: string
-): GoogleReleaseConfig {
+interface GoogleConfigValueOverrides {
+  desktopClientId?: string;
+  hostedBaseUrl?: string;
+  desktopClientSecret?: string;
+  loginHint?: string;
+}
+
+export function resolveGoogleConfigFromValues(overrides: GoogleConfigValueOverrides = {}): GoogleReleaseConfig {
+  const desktopClientId = overrides.desktopClientId || process.env.GDOCSYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID;
+  const hostedBaseUrlOverride = overrides.hostedBaseUrl || process.env.GDOCSYNC_HOSTED_BASE_URL || DEFAULT_HOSTED_BASE_URL;
   const hostedBaseUrl = normalizeBaseUrl(hostedBaseUrlOverride);
   return {
     desktopClientId: desktopClientId.trim() || DEFAULT_DESKTOP_CLIENT_ID,
-    desktopClientSecret: desktopClientSecret?.trim() || undefined,
+    desktopClientSecret: overrides.desktopClientSecret?.trim() || process.env.GDOCSYNC_DESKTOP_CLIENT_SECRET || undefined,
     hostedBaseUrl,
     oauthBridgeUrl: `${hostedBaseUrl}/oauth/google/bridge`,
     pickerUrl: `${hostedBaseUrl}/picker`,
     scope: DEFAULT_SCOPE,
-    loginHint: loginHint?.trim() || undefined
+    loginHint: overrides.loginHint?.trim() || process.env.GDOCSYNC_LOGIN_HINT || undefined
   };
 }
 
-export function resolveExtensionGoogleConfig(): GoogleReleaseConfig {
-  const config = vscode.workspace.getConfiguration("gdocSync");
-  const desktopClientId =
-    config.get<string>("development.desktopClientId") ||
-    process.env.GDOCSYNC_DESKTOP_CLIENT_ID ||
-    DEFAULT_DESKTOP_CLIENT_ID;
-  const desktopClientSecret =
-    config.get<string>("development.desktopClientSecret") || process.env.GDOCSYNC_DESKTOP_CLIENT_SECRET;
-  const loginHint = config.get<string>("development.loginHint") || process.env.GDOCSYNC_LOGIN_HINT;
-  const hostedBaseUrl =
-    config.get<string>("development.hostedBaseUrl") ||
-    process.env.GDOCSYNC_HOSTED_BASE_URL ||
-    DEFAULT_HOSTED_BASE_URL;
-
-  return buildConfig(desktopClientId, hostedBaseUrl, desktopClientSecret, loginHint);
-}
-
 export function resolveCliGoogleConfig(env: NodeJS.ProcessEnv = process.env): GoogleReleaseConfig {
-  return buildConfig(
-    env.GDOCSYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID,
-    env.GDOCSYNC_HOSTED_BASE_URL,
-    env.GDOCSYNC_DESKTOP_CLIENT_SECRET,
-    env.GDOCSYNC_LOGIN_HINT
-  );
+  return resolveGoogleConfigFromValues({
+    desktopClientId: env.GDOCSYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID,
+    hostedBaseUrl: env.GDOCSYNC_HOSTED_BASE_URL,
+    desktopClientSecret: env.GDOCSYNC_DESKTOP_CLIENT_SECRET,
+    loginHint: env.GDOCSYNC_LOGIN_HINT
+  });
 }
 
 export function assertDesktopClientConfigured(config: GoogleReleaseConfig): void {

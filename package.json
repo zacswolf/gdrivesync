@@ -1,7 +1,7 @@
 {
   "name": "gdrivesync-vscode-extension",
   "displayName": "GDriveSync",
-  "description": "One-way Google Drive file to Markdown or CSV sync for VS Code.",
+  "description": "Google Drive to Markdown or CSV sync for VS Code and agent-friendly CLI workflows.",
   "version": "0.1.0",
   "publisher": "zacswolf",
   "license": "MIT",
@@ -15,6 +15,8 @@
   "keywords": [
     "google docs",
     "google sheets",
+    "ai agents",
+    "cli",
     "markdown",
     "csv",
     "xlsx",
@@ -23,6 +25,9 @@
     "docs"
   ],
   "main": "./dist/extension.js",
+  "bin": {
+    "gdrivesync": "./dist/cli.js"
+  },
   "files": [
     "dist",
     "site",
