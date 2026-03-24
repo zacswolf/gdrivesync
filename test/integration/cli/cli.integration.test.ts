@@ -35,6 +35,10 @@ async function createSandbox() {
       HOME: homeDir,
       XDG_CONFIG_HOME: xdgConfigHome,
       APPDATA: appData,
+      OPENAI_API_KEY: "",
+      ANTHROPIC_API_KEY: "",
+      GDRIVESYNC_HOSTED_BASE_URL: "",
+      GDRIVESYNC_LOGIN_HINT: "",
       GDRIVESYNC_DESKTOP_CLIENT_ID: "test-desktop-client-id",
       GDRIVESYNC_DESKTOP_CLIENT_SECRET: "test-desktop-client-secret"
     }
