@@ -178,6 +178,11 @@
           "default": true,
           "description": "Automatically unlink a linked primary local file when that file is deleted. Generated spreadsheet CSV children are not unlinked by this setting."
         },
+        "gdocSync.slides.includeBackgroundsInApiFallback": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include slide background images when oversized native Google Slides decks fall back to the Google Slides API conversion path."
+        },
         "gdocSync.development.desktopClientId": {
           "type": "string",
           "default": "",

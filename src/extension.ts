@@ -13,7 +13,7 @@ import {
   getSyncProfilesForTargetFamily,
   resolveSyncProfileForMimeType
 } from "./syncProfiles";
-import { SyncManager } from "./syncManager";
+import { SyncManager, SyncProgressReporter } from "./syncManager";
 import { SecretStorageTokenStore } from "./tokenStores";
 import { ParsedDocInput, PickerSelection, SyncOutcome } from "./types";
 import { SlidesClient } from "./slidesClient";
@@ -217,6 +217,61 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.window.showInformationMessage(outcome.message);
   }
 
+  async function showSyncAllOutcome(summary: {
+    results: Array<{ file: string; outcome: SyncOutcome }>;
+    syncedCount: number;
+    skippedCount: number;
+    cancelledCount: number;
+  }): Promise<void> {
+    const transitionedDirectories = summary.results
+      .map((result) => result.outcome.transition)
+      .filter(
+        (transition): transition is NonNullable<SyncOutcome["transition"]> =>
+          transition?.kind === "spreadsheet-output-kind-changed" &&
+          transition.nextOutputKind === "directory" &&
+          Boolean(transition.generatedDirectoryPath)
+      );
+
+    if (transitionedDirectories.length === 1) {
+      const selection = await vscode.window.showInformationMessage(buildSyncAllMessage(summary), "Reveal Folder");
+      if (selection === "Reveal Folder") {
+        await vscode.commands.executeCommand(
+          "revealInExplorer",
+          vscode.Uri.file(transitionedDirectories[0].generatedDirectoryPath!)
+        );
+      }
+      return;
+    }
+
+    void vscode.window.showInformationMessage(buildSyncAllMessage(summary));
+  }
+
+  async function withSyncProgress<T>(
+    title: string,
+    task: (progress: SyncProgressReporter) => Promise<T>
+  ): Promise<T> {
+    return vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title,
+        cancellable: false
+      },
+      async (progress) => {
+        let lastMessage: string | undefined;
+        return task({
+          report(message: string) {
+            if (message === lastMessage) {
+              return;
+            }
+
+            lastMessage = message;
+            progress.report({ message });
+          }
+        });
+      }
+    );
+  }
+
   async function refreshUi(): Promise<void> {
     await updateStatusBar();
     codeLensEmitter.fire();
@@ -373,7 +428,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
-    const outcome = await syncManager.linkFile(localFileUri, selection);
+    const outcome = await withSyncProgress("Linking Google file…", (progress) =>
+      syncManager.linkFile(localFileUri, selection, { progress })
+    );
     await refreshUi();
     await revealCurrentLinkedOutput(localFileUri);
     await showSyncOutcome(outcome);
@@ -442,7 +499,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       throw new Error("Imported local files must live inside an open workspace folder.");
     }
 
-    const outcome = await syncManager.linkFile(targetUri, selection);
+    const outcome = await withSyncProgress(`Importing ${resolvedProfile.sourceTypeLabel}…`, (progress) =>
+      syncManager.linkFile(targetUri, selection, { progress })
+    );
     await openImportedOutput(targetUri);
     await refreshUi();
     await showSyncOutcome(outcome);
@@ -453,7 +512,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const localFileUri = getTargetLocalFileUri(targetUri);
     const linkedFile = await manifestStore.getLinkedFile(localFileUri);
     const baseTargetUri = linkedFile ? vscode.Uri.file(fromManifestKey(linkedFile.folderPath, linkedFile.key)) : localFileUri;
-    const outcome = await syncManager.syncFile(localFileUri, { reason: "manual" });
+    const outcome = await withSyncProgress("Syncing from Google…", (progress) =>
+      syncManager.syncFile(localFileUri, { reason: "manual", progress })
+    );
     await refreshUi();
     await revealCurrentLinkedOutput(localFileUri, baseTargetUri);
     if (outcome.status !== "skipped") {
@@ -600,8 +661,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("gdocSync.syncAll", async () => {
       try {
         await ensureSignedIn();
-        const summary = await syncManager.syncAll();
-        void vscode.window.showInformationMessage(buildSyncAllMessage(summary));
+        const summary = await withSyncProgress("Syncing all linked files…", (progress) => syncManager.syncAll({ progress }));
+        await showSyncAllOutcome(summary);
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }

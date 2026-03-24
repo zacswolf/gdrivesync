@@ -218,4 +218,116 @@ describe("convertSlidesApiPresentationToMarp", () => {
     expect(result.markdown).toContain("![Shared Logo](");
     expect(result.markdown).toContain("![Shared Logo Again](");
   });
+
+  it("can omit background images", async () => {
+    const imageBytes = Buffer.from(PNG_PIXEL_BASE64, "base64");
+    const fetchImpl: typeof fetch = async () =>
+      new Response(imageBytes, {
+        status: 200,
+        headers: {
+          "content-type": "image/png"
+        }
+      });
+
+    const result = await convertSlidesApiPresentationToMarp(
+      "/tmp/growth-burst.md",
+      {
+        title: "Growth Burst",
+        slides: [
+          {
+            objectId: "slide-1",
+            pageProperties: {
+              pageBackgroundFill: {
+                stretchedPictureFill: {
+                  contentUrl: "https://images.example.com/background.png"
+                }
+              }
+            },
+            pageElements: [
+              {
+                objectId: "image-1",
+                title: "Diagram",
+                image: {
+                  contentUrl: "https://images.example.com/diagram.png"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        assetMode: "external",
+        title: "Growth Burst",
+        includeBackgrounds: false
+      },
+      fetchImpl
+    );
+
+    expect(result.assets).toHaveLength(1);
+    expect(result.markdown).toContain("![Diagram](");
+    expect(result.markdown).not.toContain("background");
+  });
+
+  it("reports slide rendering progress", async () => {
+    const imageBytes = Buffer.from(PNG_PIXEL_BASE64, "base64");
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = String(input);
+      if (!url.startsWith("https://images.example.com/")) {
+        throw new Error(`Unexpected URL: ${url}`);
+      }
+
+      return new Response(imageBytes, {
+        status: 200,
+        headers: {
+          "content-type": "image/png"
+        }
+      });
+    };
+    const progressSnapshots: string[] = [];
+
+    const result = await convertSlidesApiPresentationToMarp(
+      "/tmp/growth-burst.md",
+      {
+        title: "Growth Burst",
+        slides: [
+          {
+            objectId: "slide-1",
+            pageElements: [
+              {
+                objectId: "image-1",
+                title: "Diagram One",
+                image: {
+                  contentUrl: "https://images.example.com/diagram-1.png"
+                }
+              }
+            ]
+          },
+          {
+            objectId: "slide-2",
+            pageElements: [
+              {
+                objectId: "image-2",
+                title: "Diagram Two",
+                image: {
+                  contentUrl: "https://images.example.com/diagram-2.png"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        assetMode: "external",
+        title: "Growth Burst",
+        onProgress: (completedSlides, totalSlides) => {
+          progressSnapshots.push(`${completedSlides}/${totalSlides}`);
+        }
+      },
+      fetchImpl
+    );
+
+    expect(result.slideCount).toBe(2);
+    expect(progressSnapshots).toContain("1/2");
+    expect(progressSnapshots.at(-1)).toBe("2/2");
+  });
 });

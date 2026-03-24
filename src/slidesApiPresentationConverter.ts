@@ -11,6 +11,8 @@ type AssetMode = "external" | "data-uri";
 interface PresentationConversionOptions {
   assetMode?: AssetMode;
   title?: string;
+  includeBackgrounds?: boolean;
+  onProgress?: (completedSlides: number, totalSlides: number) => void;
 }
 
 interface PresentationMarkdownResult {
@@ -179,7 +181,11 @@ function formatTextBlock(block: SlideTextBlock): string[] {
   return paragraphs.map((paragraph) => `${"  ".repeat(paragraph.level ?? 0)}- ${paragraph.text}`);
 }
 
-function parseSlide(slide: SlidesApiSlide, slideIndex: number): ParsedSlide {
+function parseSlide(
+  slide: SlidesApiSlide,
+  slideIndex: number,
+  options: Pick<PresentationConversionOptions, "includeBackgrounds">
+): ParsedSlide {
   const textBlocks = (slide.pageElements || [])
     .map((element) => extractShapeTextBlock(element))
     .filter((block): block is SlideTextBlock => Boolean(block));
@@ -196,7 +202,8 @@ function parseSlide(slide: SlidesApiSlide, slideIndex: number): ParsedSlide {
     .filter((block) => block.length > 0);
 
   const images: SlideImageSource[] = [];
-  const backgroundContentUrl = slide.pageProperties?.pageBackgroundFill?.stretchedPictureFill?.contentUrl;
+  const backgroundContentUrl =
+    options.includeBackgrounds === false ? undefined : slide.pageProperties?.pageBackgroundFill?.stretchedPictureFill?.contentUrl;
   if (backgroundContentUrl) {
     images.push({
       altText: `Slide ${slideIndex} background`,
@@ -406,15 +413,32 @@ export async function convertSlidesApiPresentationToMarp(
     throw new Error("Google Slides API did not return any visible slides.");
   }
 
-  const parsedSlides = slides.map((slide, index) => parseSlide(slide, index + 1));
+  const parsedSlides = slides.map((slide, index) =>
+    parseSlide(slide, index + 1, {
+      includeBackgrounds: options.includeBackgrounds
+    })
+  );
   const deckTitle = options.title || presentation.title || parsedSlides.find((slide) => slide.title)?.title || path.parse(markdownFilePath).name;
   const assets: GeneratedFilePayload[] = [];
   const downloadCache = new Map<string, Promise<DownloadedSlideImage>>();
   const assetPathByContentHash = new Map<string, string>();
+  let completedSlides = 0;
   const slideMarkdown = (
-    await mapWithConcurrencyLimit(parsedSlides, SLIDE_RENDER_CONCURRENCY, (slide, index) =>
-      renderSlideMarkdown(slide, index + 1, markdownFilePath, assets, assetMode, fetchImpl, downloadCache, assetPathByContentHash)
-    )
+    await mapWithConcurrencyLimit(parsedSlides, SLIDE_RENDER_CONCURRENCY, async (slide, index) => {
+      const renderedSlide = await renderSlideMarkdown(
+        slide,
+        index + 1,
+        markdownFilePath,
+        assets,
+        assetMode,
+        fetchImpl,
+        downloadCache,
+        assetPathByContentHash
+      );
+      completedSlides += 1;
+      options.onProgress?.(completedSlides, parsedSlides.length);
+      return renderedSlide;
+    })
   )
     .join("\n\n---\n\n")
     .trimEnd();

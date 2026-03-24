@@ -43,6 +43,7 @@ Agent-friendly qualities:
 - Drive-hosted `.xlsx` download and local `.csv` generation
 - Workspace sidecar manifest in `.gdrivesync.json`
 - Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
+- Progress notifications for manual import and sync flows in the VS Code extension
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
 - Agent-friendly CLI entrypoint with auth, inspect, export, link, status, sync, and unlink flows
@@ -146,7 +147,7 @@ gdrivesync auth logout
 gdrivesync auth status [--json]
 gdrivesync inspect <google-file-url-or-id> [--json]
 gdrivesync metadata <google-file-url-or-id> [--json]
-gdrivesync export <google-file-url-or-id> [output-path] [--json]
+gdrivesync export <google-file-url-or-id> [output-path] [--json] [--include-backgrounds]
 gdrivesync link <google-file-url-or-id> <local-path> [--cwd path] [--json] [--force]
 gdrivesync status <local-path> [--cwd path] [--json]
 gdrivesync status --all [--cwd path] [--json]
@@ -162,6 +163,7 @@ Key CLI behaviors:
 - `sync` and `link` return a non-zero exit code when they are cancelled or fail
 - top-level command failures stay machine-readable in `--json` mode
 - `export` writes to stdout when no output path is given, and writes files when one is provided
+- oversized native Google Slides decks that fall back to the Slides API omit slide background images by default; use `--include-backgrounds` if you want them
 
 Examples:
 

@@ -22,6 +22,7 @@ interface CliFlags {
   all: boolean;
   force: boolean;
   removeGenerated: boolean;
+  includeBackgrounds: boolean;
   cwd?: string;
 }
 
@@ -39,7 +40,7 @@ function printUsage(): void {
   gdrivesync auth status [--json]
   gdrivesync inspect <google-file-url-or-id> [--json]
   gdrivesync metadata <google-file-url-or-id> [--json]
-  gdrivesync export <google-file-url-or-id> [output-path] [--json]
+  gdrivesync export <google-file-url-or-id> [output-path] [--json] [--include-backgrounds]
   gdrivesync link <google-file-url-or-id> <local-path> [--cwd path] [--json] [--force]
   gdrivesync status <local-path> [--cwd path] [--json]
   gdrivesync status --all [--cwd path] [--json]
@@ -52,7 +53,8 @@ Flags:
   --cwd <path>        Workspace root to use for manifest operations
   --all               Target every linked file in the manifest
   --force             Overwrite local changes during sync
-  --remove-generated  Remove tracked generated files when unlinking
+  --remove-generated   Remove tracked generated files when unlinking
+  --include-backgrounds  For oversized Google Slides decks that fall back to the Slides API, include slide background images
 `);
 }
 
@@ -80,7 +82,8 @@ function parseCliInput(rawArgs: string[]): ParsedCliInput {
     json: false,
     all: false,
     force: false,
-    removeGenerated: false
+    removeGenerated: false,
+    includeBackgrounds: false
   };
   const positionals: string[] = [];
 
@@ -100,6 +103,10 @@ function parseCliInput(rawArgs: string[]): ParsedCliInput {
     }
     if (arg === "--remove-generated") {
       flags.removeGenerated = true;
+      continue;
+    }
+    if (arg === "--include-backgrounds") {
+      flags.includeBackgrounds = true;
       continue;
     }
     if (arg === "--cwd") {
@@ -354,7 +361,8 @@ async function main(): Promise<void> {
         resourceKey: metadata.resourceKey || parsedInput.resourceKey
       },
       {
-        targetPath: resolvedOutputPath
+        targetPath: resolvedOutputPath,
+        includePresentationBackgrounds: parsed.flags.includeBackgrounds
       }
     );
 

@@ -31,6 +31,15 @@ interface TrackedOutputState {
   hasModified: boolean;
 }
 
+export interface SyncProgressReporter {
+  report(message: string): void;
+}
+
+interface SyncFileOptions {
+  reason?: "manual" | "open" | "link";
+  progress?: SyncProgressReporter;
+}
+
 export class SyncManager {
   private readonly inFlightSyncs = new Map<string, Promise<SyncOutcome>>();
   private readonly openDebounce = new Map<string, NodeJS.Timeout>();
@@ -42,7 +51,7 @@ export class SyncManager {
     private readonly slidesClient: SlidesClient
   ) {}
 
-  async linkFile(fileUri: vscode.Uri, selection: PickerSelection): Promise<SyncOutcome> {
+  async linkFile(fileUri: vscode.Uri, selection: PickerSelection, options?: { progress?: SyncProgressReporter }): Promise<SyncOutcome> {
     const syncOnOpen = vscode.workspace.getConfiguration("gdocSync").get<boolean>("syncOnOpenDefault", false);
     const profile = getSyncProfile(selection.profileId);
     await this.manifestStore.linkFile(fileUri, {
@@ -63,7 +72,7 @@ export class SyncManager {
       lastSyncedAt: undefined
     });
     try {
-      return await this.syncFile(fileUri, { reason: "link" });
+      return await this.syncFile(fileUri, { reason: "link", progress: options?.progress });
     } catch (error) {
       await this.manifestStore.unlinkFile(fileUri);
       throw error;
@@ -95,7 +104,7 @@ export class SyncManager {
     return this.manifestStore.unlinkFile(fileUri);
   }
 
-  async syncFile(fileUri: vscode.Uri, options?: { reason?: "manual" | "open" | "link" }): Promise<SyncOutcome> {
+  async syncFile(fileUri: vscode.Uri, options?: SyncFileOptions): Promise<SyncOutcome> {
     const linkedFile = await this.manifestStore.getLinkedFile(fileUri);
     if (!linkedFile) {
       throw new Error("This file is not linked to a Google source yet.");
@@ -114,7 +123,7 @@ export class SyncManager {
     return syncTask;
   }
 
-  async syncAll(): Promise<{
+  async syncAll(options?: { progress?: SyncProgressReporter }): Promise<{
     results: Array<{ file: string; outcome: SyncOutcome }>;
     syncedCount: number;
     skippedCount: number;
@@ -125,8 +134,15 @@ export class SyncManager {
     let syncedCount = 0;
     let skippedCount = 0;
     let cancelledCount = 0;
-    for (const linkedFile of linkedFiles) {
-      const outcome = await this.syncFile(linkedFile.fileUri, { reason: "manual" });
+    for (const [index, linkedFile] of linkedFiles.entries()) {
+      const baseTargetUri = this.getBaseTargetUri(linkedFile.context);
+      const scopedProgress = options?.progress
+        ? {
+            report: (message: string) =>
+              options.progress?.report(`${index + 1}/${linkedFiles.length}: ${path.basename(baseTargetUri.fsPath)} — ${message}`)
+          }
+        : undefined;
+      const outcome = await this.syncFile(linkedFile.fileUri, { reason: "manual", progress: scopedProgress });
       if (outcome.status === "synced") {
         syncedCount += 1;
       } else if (outcome.status === "skipped") {
@@ -173,11 +189,12 @@ export class SyncManager {
 
   private async doSyncFile(
     linkedFile: LinkedFileContext,
-    options?: { reason?: "manual" | "open" | "link" }
+    options?: SyncFileOptions
   ): Promise<SyncOutcome> {
     const profile = getSyncProfile(linkedFile.entry.profileId);
     const accessToken = await this.authManager.getAccessToken();
     const baseTargetUri = this.getBaseTargetUri(linkedFile);
+    options?.progress?.report("Checking Google metadata…");
     const metadata = await this.readLinkedFileMetadataWithHelpfulError(accessToken, linkedFile, profile);
 
     if (profile.targetFamily === "csv") {
@@ -221,15 +238,20 @@ export class SyncManager {
       localText &&
       needsAssetMigration &&
       !trackedAssetsNeedRepair
-        ? extractMarkdownAssets(baseTargetUri.fsPath, localText)
+        ? (() => {
+            options?.progress?.report("Refreshing local Markdown image assets…");
+            return extractMarkdownAssets(baseTargetUri.fsPath, localText);
+          })()
         : await this.prepareMarkdownOutput(
             baseTargetUri.fsPath,
             accessToken,
             linkedFile.entry.fileId,
             linkedFile.entry.resourceKey,
             profile,
-            metadata.name
+            metadata.name,
+            options?.progress
           );
+    options?.progress?.report("Writing local files…");
     await this.syncGeneratedFiles(baseTargetUri, this.getTrackedGeneratedFilePaths(linkedFile.entry), preparedContent.assets);
     await this.writeTextFile(baseTargetUri, preparedContent.markdown);
     const nextHash = sha256Text(preparedContent.markdown);
@@ -288,7 +310,7 @@ export class SyncManager {
     profile: SyncProfile,
     metadata: { id: string; name: string; mimeType: string; version: string; resourceKey?: string; webViewLink?: string },
     accessToken: string,
-    options?: { reason?: "manual" | "open" | "link" }
+    options?: SyncFileOptions
   ): Promise<SyncOutcome> {
     const outputState = await this.inspectSpreadsheetOutputState(baseTargetUri, linkedFile.entry);
     if (
@@ -317,6 +339,9 @@ export class SyncManager {
       }
     }
 
+    options?.progress?.report(
+      profile.retrievalMode === "drive-export-xlsx" ? "Exporting spreadsheet as Excel…" : "Downloading workbook…"
+    );
     const workbookBytes = await this.fetchWorkbookBytes(accessToken, linkedFile.entry.fileId, linkedFile.entry.resourceKey, profile);
     const workbookOutput = parseWorkbookToCsvOutput(baseTargetUri.fsPath, workbookBytes);
     const syncSummary = buildSpreadsheetSyncSummary({
@@ -330,6 +355,9 @@ export class SyncManager {
       throw new Error("Spreadsheet sync did not produce a primary CSV file.");
     }
 
+    options?.progress?.report(
+      workbookOutput.outputKind === "directory" ? "Writing local CSV files…" : "Writing local CSV file…"
+    );
     if (workbookOutput.outputKind === "directory") {
       await this.syncGeneratedFiles(baseTargetUri, this.getTrackedGeneratedFilePaths(linkedFile.entry), workbookOutput.generatedFiles);
       if (linkedFile.entry.outputKind === "file") {
@@ -460,13 +488,18 @@ export class SyncManager {
     fileId: string,
     resourceKey: string | undefined,
     profile: ReturnType<typeof getSyncProfile>,
-    title: string
+    title: string,
+    progress?: SyncProgressReporter
   ) {
     if (profile.localFormat === "marp") {
-      return this.preparePresentationOutput(markdownFilePath, accessToken, fileId, resourceKey, profile, title);
+      return this.preparePresentationOutput(markdownFilePath, accessToken, fileId, resourceKey, profile, title, progress);
     }
 
+    progress?.report(profile.retrievalMode === "drive-download-docx" ? "Downloading Word document…" : "Exporting document as Markdown…");
     const sourceText = await this.fetchSourceMarkdown(accessToken, fileId, resourceKey, profile);
+    if (containsEmbeddedImageData(sourceText)) {
+      progress?.report("Extracting embedded images…");
+    }
     return extractMarkdownAssets(markdownFilePath, sourceText);
   }
 
@@ -476,9 +509,13 @@ export class SyncManager {
     fileId: string,
     resourceKey: string | undefined,
     profile: ReturnType<typeof getSyncProfile>,
-    title: string
+    title: string,
+    progress?: SyncProgressReporter
   ) {
     try {
+      progress?.report(
+        profile.retrievalMode === "drive-export-pptx" ? "Exporting presentation as PowerPoint…" : "Downloading PowerPoint presentation…"
+      );
       const presentationBytes = await this.fetchPresentationBytes(accessToken, fileId, resourceKey, profile);
       return await convertPresentationToMarp(markdownFilePath, presentationBytes, {
         assetMode: "external",
@@ -486,13 +523,27 @@ export class SyncManager {
       });
     } catch (error) {
       if (profile.id === "google-slide-marp" && error instanceof GoogleApiError && error.reason === "exportSizeLimitExceeded") {
+        progress?.report("Presentation too large for Drive export. Switching to the Google Slides API…");
+        progress?.report("Loading slide structure…");
         const presentation = await this.slidesClient.getPresentation(accessToken, fileId);
+        let lastReportedSlide = 0;
         return convertSlidesApiPresentationToMarp(
           markdownFilePath,
           presentation,
           {
             assetMode: "external",
-            title
+            title,
+            includeBackgrounds: this.includeSlidesApiFallbackBackgrounds(),
+            onProgress: (completedSlides, totalSlides) => {
+              if (
+                completedSlides === totalSlides ||
+                completedSlides === 1 ||
+                completedSlides - lastReportedSlide >= 10
+              ) {
+                lastReportedSlide = completedSlides;
+                progress?.report(`Rendering slides ${completedSlides}/${totalSlides}…`);
+              }
+            }
           }
         );
       }
@@ -512,6 +563,10 @@ export class SyncManager {
     }
 
     return this.driveClient.downloadFile(accessToken, fileId, resourceKey);
+  }
+
+  private includeSlidesApiFallbackBackgrounds(): boolean {
+    return vscode.workspace.getConfiguration("gdocSync").get<boolean>("slides.includeBackgroundsInApiFallback", false);
   }
 
   private async fetchWorkbookBytes(

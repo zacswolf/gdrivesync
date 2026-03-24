@@ -59,6 +59,11 @@ export interface CliExportResult {
   generatedDirectoryPath?: string;
 }
 
+interface CliExportOptions {
+  targetPath?: string;
+  includePresentationBackgrounds?: boolean;
+}
+
 export class CliSyncManager {
   constructor(
     private readonly authManager: GoogleAuthManager,
@@ -195,7 +200,7 @@ export class CliSyncManager {
     return this.manifestStore.unlinkFile(filePath);
   }
 
-  async exportSelection(selection: PickerSelection, options?: { targetPath?: string }): Promise<CliExportResult> {
+  async exportSelection(selection: PickerSelection, options: CliExportOptions = {}): Promise<CliExportResult> {
     const profile = getSyncProfile(selection.profileId);
     const accessToken = await this.authManager.getAccessToken();
     const metadata = await this.driveClient.getFileMetadata(accessToken, {
@@ -262,7 +267,8 @@ export class CliSyncManager {
             selection.resourceKey,
             profile,
             metadata.name || selection.title,
-            options?.targetPath ? "external" : "data-uri"
+            options.targetPath ? "external" : "data-uri",
+            options.includePresentationBackgrounds ?? false
           )
         : extractMarkdownAssets(
             exportMarkdownPath,
@@ -488,7 +494,7 @@ export class CliSyncManager {
     title: string
   ) {
     if (profile.localFormat === "marp") {
-      return this.preparePresentationOutput(markdownFilePath, accessToken, fileId, resourceKey, profile, title, "external");
+      return this.preparePresentationOutput(markdownFilePath, accessToken, fileId, resourceKey, profile, title, "external", false);
     }
 
     const sourceText = await this.fetchSourceMarkdown(accessToken, fileId, resourceKey, profile);
@@ -502,7 +508,8 @@ export class CliSyncManager {
     resourceKey: string | undefined,
     profile: ReturnType<typeof getSyncProfile>,
     title: string,
-    assetMode: "external" | "data-uri"
+    assetMode: "external" | "data-uri",
+    includeBackgrounds: boolean
   ) {
     try {
       const presentationBytes = await this.fetchPresentationBytes(accessToken, fileId, resourceKey, profile);
@@ -518,7 +525,8 @@ export class CliSyncManager {
           presentation,
           {
             assetMode,
-            title
+            title,
+            includeBackgrounds
           }
         );
       }
