@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import { normalizeManifest } from "./manifestSchema";
+import { parseManifestText } from "./manifestSchema";
 import { LinkedFileContext, LinkedFileEntry, SyncManifest } from "./types";
 import { fromManifestKey, toManifestKey } from "./utils/paths";
 
@@ -59,7 +59,7 @@ export class CliManifestStore {
   async readManifest(): Promise<SyncManifest> {
     try {
       const rawValue = await readFile(this.getManifestPath(), "utf8");
-      return normalizeManifest(JSON.parse(rawValue));
+      return parseManifestText(rawValue, this.getManifestPath()).manifest;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return defaultManifest();

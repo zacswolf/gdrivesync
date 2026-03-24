@@ -23,8 +23,9 @@ Agent-friendly qualities:
 - stable local outputs: Markdown and CSV
 - direct export to stdout for single-file workflows
 - first-class manifest-aware `link`, `status`, `sync`, and `unlink` commands
-- machine-readable `inspect`, `status`, `sync`, and `export` output with `--json`
+- machine-readable command envelopes with a stable `contractVersion` and `ok/data` or `ok/error` shape under `--json`
 - explicit workspace targeting with `--cwd`
+- a `doctor` command for auth/manifest diagnostics and corruption recovery
 - predictable spreadsheet shape switching:
   - one visible sheet -> `report.csv`
   - multiple visible sheets -> `report/<sheet>.csv`
@@ -145,6 +146,7 @@ Current command set:
 gdrivesync auth login
 gdrivesync auth logout
 gdrivesync auth status [--json]
+gdrivesync doctor [--cwd path] [--json] [--repair]
 gdrivesync inspect <google-file-url-or-id> [--json]
 gdrivesync metadata <google-file-url-or-id> [--json]
 gdrivesync export <google-file-url-or-id> [output-path] [--json] [--include-backgrounds]
@@ -158,18 +160,22 @@ gdrivesync unlink <local-path> [--cwd path] [--json] [--remove-generated]
 
 Key CLI behaviors:
 - `link` immediately creates the manifest entry and runs an initial sync
+- every `--json` response uses a top-level envelope with `ok`, `contractVersion`, `command`, and either `data` or `error`
 - `status --all --json` returns manifest-aware file metadata for the whole workspace
 - `sync --all --json` returns per-file results with `synced`, `skipped`, `cancelled`, or `failed`
 - `sync` and `link` return a non-zero exit code when they are cancelled or fail
-- top-level command failures stay machine-readable in `--json` mode
+- top-level command failures stay machine-readable in `--json` mode with stable error codes
 - `export` writes to stdout when no output path is given, and writes files when one is provided
 - oversized native Google Slides decks that fall back to the Slides API omit slide background images by default; use `--include-backgrounds` if you want them
+- `doctor --repair` backs up corrupt CLI auth or manifest state before restoring a working baseline
 
 Examples:
 
 ```bash
 npm run cli -- auth login
 npm run cli -- auth status --json
+npm run cli -- doctor --cwd ./data --json
+npm run cli -- doctor --cwd ./data --json --repair
 npm run cli -- inspect https://docs.google.com/document/d/<file-id>/edit --json
 npm run cli -- export https://docs.google.com/document/d/<file-id>/edit
 npm run cli -- export https://docs.google.com/presentation/d/<file-id>/edit ./deck.md --json
@@ -181,19 +187,24 @@ npm run cli -- sync --all --cwd ./data --json
 npm run cli -- unlink ./notes/spec.md --cwd ./data --json
 ```
 
-Example `inspect` output:
+Example `inspect --json` output:
 
 ```json
 {
-  "fileId": "abc123",
-  "title": "Quarterly Planning",
-  "sourceMimeType": "application/vnd.google-apps.spreadsheet",
-  "sourceUrl": "https://docs.google.com/spreadsheets/d/abc123/edit",
-  "profileId": "google-sheet-csv",
-  "sourceTypeLabel": "Spreadsheet",
-  "targetFamily": "csv",
-  "targetFileExtension": "csv",
-  "retrievalMode": "drive-export-xlsx"
+  "ok": true,
+  "contractVersion": 1,
+  "command": "inspect",
+  "data": {
+    "fileId": "abc123",
+    "title": "Quarterly Planning",
+    "sourceMimeType": "application/vnd.google-apps.spreadsheet",
+    "sourceUrl": "https://docs.google.com/spreadsheets/d/abc123/edit",
+    "profileId": "google-sheet-csv",
+    "sourceTypeLabel": "Spreadsheet",
+    "targetFamily": "csv",
+    "targetFileExtension": "csv",
+    "retrievalMode": "drive-export-xlsx"
+  }
 }
 ```
 
@@ -201,28 +212,70 @@ Example `sync --all --json` output shape:
 
 ```json
 {
-  "rootPath": "/workspace/data",
-  "manifestPath": "/workspace/data/.gdrivesync.json",
-  "results": [
-    {
-      "file": "/workspace/data/spec.md",
-      "outcome": {
-        "status": "synced",
-        "message": "Synced spec.md."
+  "ok": true,
+  "contractVersion": 1,
+  "command": "sync",
+  "data": {
+    "rootPath": "/workspace/data",
+    "manifestPath": "/workspace/data/.gdrivesync.json",
+    "results": [
+      {
+        "file": "/workspace/data/spec.md",
+        "outcome": {
+          "status": "synced",
+          "message": "Synced spec.md."
+        }
+      },
+      {
+        "file": "/workspace/data/report.csv",
+        "outcome": {
+          "status": "skipped",
+          "message": "Remote version unchanged."
+        }
       }
+    ],
+    "syncedCount": 1,
+    "skippedCount": 1,
+    "cancelledCount": 0,
+    "failedCount": 0
+  }
+}
+```
+
+Example `doctor --json` output shape:
+
+```json
+{
+  "ok": true,
+  "contractVersion": 1,
+  "command": "doctor",
+  "data": {
+    "rootPath": "/workspace/data",
+    "manifest": {
+      "path": "/workspace/data/.gdrivesync.json",
+      "exists": true,
+      "valid": true,
+      "linkedFileCount": 8,
+      "droppedInvalidEntryCount": 0,
+      "missingPrimaryFileCount": 0,
+      "missingGeneratedFileCount": 0
     },
-    {
-      "file": "/workspace/data/report.csv",
-      "outcome": {
-        "status": "skipped",
-        "message": "Remote version unchanged."
-      }
+    "auth": {
+      "tokenPath": "/Users/me/.gdrivesync-dev-session.json",
+      "sessionFileExists": true,
+      "authenticated": true,
+      "sessionValid": true,
+      "refreshTokenPresent": true,
+      "scopeMatchesConfig": true,
+      "currentUserEmail": "me@example.com"
+    },
+    "issues": [],
+    "repair": {
+      "attempted": false,
+      "performed": false,
+      "actions": []
     }
-  ],
-  "syncedCount": 1,
-  "skippedCount": 1,
-  "cancelledCount": 0,
-  "failedCount": 0
+  }
 }
 ```
 
@@ -234,6 +287,21 @@ If you are building agent integrations, prefer:
 - `status --all --json` before `sync --all --json` when you want to reason about what will be touched
 
 There is also a short agent-focused usage guide in [docs/agent-cli.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/agent-cli.md).
+
+## State recovery
+
+If the CLI manifest or saved CLI OAuth session gets corrupted, GDriveSync now fails with explicit machine-readable error codes instead of a raw JSON parse stack. The supported recovery path is:
+
+```bash
+gdrivesync doctor --cwd ./workspace --json
+gdrivesync doctor --cwd ./workspace --repair
+```
+
+`doctor --repair` backs up corrupt local CLI state before restoring a working baseline:
+- corrupt `.gdrivesync.json` manifests are backed up and replaced with a clean manifest, preserving valid entries when possible
+- corrupt CLI OAuth session files are backed up and cleared so you can sign in again cleanly
+
+The VS Code extension uses SecretStorage instead of the CLI session file. If that state ever becomes corrupted, signing out and signing back in is the intended repair path.
 
 ## Distribution plans
 

@@ -1,4 +1,5 @@
 import { getDefaultSyncProfile, getSyncProfile, isSyncProfileId } from "./syncProfiles";
+import { CorruptStateError } from "./stateErrors";
 import { GeneratedFileRecord, SyncManifest, SyncOutputKind } from "./types";
 
 function defaultManifest(): SyncManifest {
@@ -56,6 +57,22 @@ function normalizeGeneratedFiles(value: unknown, fallbackPaths: string[] | undef
   return fallbackPaths.map((relativePath) => ({ relativePath }));
 }
 
+function countRawManifestEntries(rawValue: unknown): number {
+  if (!rawValue || typeof rawValue !== "object") {
+    return 0;
+  }
+
+  const candidateFiles = (rawValue as { files?: unknown }).files;
+  return candidateFiles && typeof candidateFiles === "object" ? Object.keys(candidateFiles as Record<string, unknown>).length : 0;
+}
+
+export interface ManifestInspection {
+  manifest: SyncManifest;
+  rawEntryCount: number;
+  normalizedEntryCount: number;
+  droppedEntryCount: number;
+}
+
 export function normalizeManifest(rawValue: unknown): SyncManifest {
   if (!rawValue || typeof rawValue !== "object") {
     return defaultManifest();
@@ -106,4 +123,28 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
   }
 
   return manifest;
+}
+
+export function inspectManifestValue(rawValue: unknown): ManifestInspection {
+  const manifest = normalizeManifest(rawValue);
+  const rawEntryCount = countRawManifestEntries(rawValue);
+  const normalizedEntryCount = Object.keys(manifest.files).length;
+  return {
+    manifest,
+    rawEntryCount,
+    normalizedEntryCount,
+    droppedEntryCount: Math.max(0, rawEntryCount - normalizedEntryCount)
+  };
+}
+
+export function parseManifestText(rawValue: string, stateLocation: string): ManifestInspection {
+  try {
+    return inspectManifestValue(JSON.parse(rawValue));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new CorruptStateError("manifest", stateLocation);
+    }
+
+    throw error;
+  }
 }

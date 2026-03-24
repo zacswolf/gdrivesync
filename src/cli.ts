@@ -5,17 +5,21 @@ import os from "node:os";
 import path from "node:path";
 import { stat } from "node:fs/promises";
 
+import { inspectCliAuthState, formatDoctorReport, runCliDoctor } from "./cliDoctor";
 import { CliManifestStore } from "./cliManifestStore";
 import { CliSyncManager } from "./cliSync";
-import { DriveClient } from "./driveClient";
+import { DriveClient, GoogleApiError, PickerGrantRequiredError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { loadDevelopmentEnv, resolveCliGoogleConfig } from "./runtimeConfig";
 import { SlidesClient } from "./slidesClient";
+import { CorruptStateError } from "./stateErrors";
 import { resolveSyncProfileForMimeType } from "./syncProfiles";
 import { FileTokenStore } from "./tokenStores";
 import { buildCliSyncAllSummary } from "./utils/cliSyncSummary";
 import { parseGoogleDocInput } from "./utils/docUrl";
 import { fromManifestKey } from "./utils/paths";
+
+const CLI_JSON_CONTRACT_VERSION = 1;
 
 interface CliFlags {
   json: boolean;
@@ -23,6 +27,7 @@ interface CliFlags {
   force: boolean;
   removeGenerated: boolean;
   includeBackgrounds: boolean;
+  repair: boolean;
   cwd?: string;
 }
 
@@ -38,6 +43,7 @@ function printUsage(): void {
   gdrivesync auth login
   gdrivesync auth logout
   gdrivesync auth status [--json]
+  gdrivesync doctor [--cwd path] [--json] [--repair]
   gdrivesync inspect <google-file-url-or-id> [--json]
   gdrivesync metadata <google-file-url-or-id> [--json]
   gdrivesync export <google-file-url-or-id> [output-path] [--json] [--include-backgrounds]
@@ -55,6 +61,7 @@ Flags:
   --force             Overwrite local changes during sync
   --remove-generated   Remove tracked generated files when unlinking
   --include-backgrounds  For oversized Google Slides decks that fall back to the Slides API, include slide background images
+  --repair            Let doctor back up corrupt local state and restore a working baseline
 `);
 }
 
@@ -83,7 +90,8 @@ function parseCliInput(rawArgs: string[]): ParsedCliInput {
     all: false,
     force: false,
     removeGenerated: false,
-    includeBackgrounds: false
+    includeBackgrounds: false,
+    repair: false
   };
   const positionals: string[] = [];
 
@@ -107,6 +115,10 @@ function parseCliInput(rawArgs: string[]): ParsedCliInput {
     }
     if (arg === "--include-backgrounds") {
       flags.includeBackgrounds = true;
+      continue;
+    }
+    if (arg === "--repair") {
+      flags.repair = true;
       continue;
     }
     if (arg === "--cwd") {
@@ -149,6 +161,107 @@ function parseCliInput(rawArgs: string[]): ParsedCliInput {
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function getCommandLabel(parsed: ParsedCliInput): string {
+  if (parsed.command === "auth") {
+    return `auth.${parsed.subcommand || "unknown"}`;
+  }
+
+  return parsed.command || "unknown";
+}
+
+function printJsonSuccess(parsed: ParsedCliInput, data: unknown): void {
+  printJson({
+    ok: true,
+    contractVersion: CLI_JSON_CONTRACT_VERSION,
+    command: getCommandLabel(parsed),
+    data
+  });
+}
+
+function buildCliErrorPayload(error: unknown): {
+  code: string;
+  message: string;
+  recoverable: boolean;
+  advice?: string;
+  path?: string;
+} {
+  if (error instanceof CorruptStateError) {
+    return {
+      code: error.kind === "manifest" ? "MANIFEST_CORRUPT" : "AUTH_SESSION_CORRUPT",
+      message: error.message,
+      recoverable: true,
+      advice: "Run gdrivesync doctor --repair to back up the corrupt state and restore a working baseline.",
+      path: error.stateLocation
+    };
+  }
+
+  if (error instanceof PickerGrantRequiredError) {
+    return {
+      code: "GOOGLE_ACCESS_DENIED",
+      message: error.message,
+      recoverable: true,
+      advice: "Verify the connected Google account can read the file, or retry with a shared-link URL that includes its resource key."
+    };
+  }
+
+  if (error instanceof GoogleApiError && error.reason === "exportSizeLimitExceeded") {
+    return {
+      code: "GOOGLE_EXPORT_TOO_LARGE",
+      message: error.message,
+      recoverable: true,
+      advice: "Retry with a lighter export mode, or let GDriveSync fall back to a format-specific API path when available."
+    };
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("You need to sign in to Google")) {
+    return {
+      code: "AUTH_REQUIRED",
+      message,
+      recoverable: true,
+      advice: "Run gdrivesync auth login."
+    };
+  }
+  if (message.includes("requires a") || message.includes("must target") || message.includes("Pass a ")) {
+    return {
+      code: "INVALID_ARGUMENT",
+      message,
+      recoverable: true,
+      advice: "Check the command usage and required path or URL arguments."
+    };
+  }
+  if (message.includes("not linked to a Google source")) {
+    return {
+      code: "NOT_LINKED",
+      message,
+      recoverable: true,
+      advice: "Link the local file first with gdrivesync link."
+    };
+  }
+  if (message.includes("Local changes detected")) {
+    return {
+      code: "LOCAL_CHANGES_BLOCK_SYNC",
+      message,
+      recoverable: true,
+      advice: "Re-run the sync with --force if you intend to overwrite the local file."
+    };
+  }
+  if (message.includes("Google desktop OAuth is not configured")) {
+    return {
+      code: "CONFIGURATION_ERROR",
+      message,
+      recoverable: true,
+      advice: "Set the local Google OAuth configuration before using the CLI."
+    };
+  }
+
+  return {
+    code: "UNKNOWN_ERROR",
+    message,
+    recoverable: false
+  };
 }
 
 function printText(value: string): void {
@@ -220,7 +333,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  const tokenStore = new FileTokenStore(path.join(os.homedir(), ".gdrivesync-dev-session.json"));
+  const tokenPath = path.join(os.homedir(), ".gdrivesync-dev-session.json");
+  const tokenStore = new FileTokenStore(tokenPath);
   const authManager = new GoogleAuthManager(tokenStore, resolveCliGoogleConfig, openExternalUrl);
   const driveClient = new DriveClient();
   const slidesClient = new SlidesClient();
@@ -231,44 +345,62 @@ async function main(): Promise<void> {
   if (parsed.command === "auth") {
     if (parsed.subcommand === "login") {
       await authManager.signIn();
+      const authState = await inspectCliAuthState(tokenPath, authManager, driveClient).catch(() => undefined);
       if (parsed.flags.json) {
-        printJson({ authenticated: true });
+        printJsonSuccess(parsed, authState?.auth || { authenticated: true });
       } else {
-        printText("Signed in.");
+        printText(
+          authState?.auth.currentUserEmail
+            ? `Signed in as ${authState.auth.currentUserEmail}.`
+            : "Signed in."
+        );
       }
       return;
     }
     if (parsed.subcommand === "logout") {
       await authManager.signOut();
       if (parsed.flags.json) {
-        printJson({ authenticated: false });
+        printJsonSuccess(parsed, { authenticated: false, tokenPath });
       } else {
         printText("Signed out.");
       }
       return;
     }
     if (parsed.subcommand === "status") {
-      const session = await tokenStore.get();
-      const payload = session
-        ? {
-            authenticated: true,
-            expiresAt: new Date(session.expiresAt).toISOString(),
-            expiresInSeconds: Math.max(0, Math.floor((session.expiresAt - Date.now()) / 1000)),
-            scope: session.scope,
-            refreshTokenPresent: Boolean(session.refreshToken)
-          }
-        : {
-            authenticated: false
-          };
+      const payload = (await inspectCliAuthState(tokenPath, authManager, driveClient)).auth;
       if (parsed.flags.json) {
-        printJson(payload);
+        printJsonSuccess(parsed, payload);
       } else {
-        printText(payload.authenticated ? `Signed in. Scope: ${payload.scope}` : "Not signed in.");
+        if (!payload.authenticated) {
+          printText("Not signed in.");
+        } else {
+          const parts = [
+            payload.currentUserEmail ? `Signed in as ${payload.currentUserEmail}` : "Signed in",
+            payload.scope ? `scope: ${payload.scope}` : undefined,
+            payload.expiresInSeconds !== undefined ? `expires in ${payload.expiresInSeconds}s` : undefined
+          ].filter(Boolean);
+          printText(parts.join(" • "));
+        }
       }
       return;
     }
 
     throw new Error("Use one of: auth login, auth logout, auth status");
+  }
+
+  if (parsed.command === "doctor") {
+    const report = await runCliDoctor(workspaceRoot, tokenPath, manifestStore, authManager, driveClient, {
+      repair: parsed.flags.repair
+    });
+    if (parsed.flags.json) {
+      printJsonSuccess(parsed, report);
+    } else {
+      printText(formatDoctorReport(report));
+    }
+    if (report.issues.some((issue) => issue.severity === "error") && !report.repair.performed) {
+      markFailure();
+    }
+    return;
   }
 
   if (parsed.command === "sign-in") {
@@ -299,11 +431,11 @@ async function main(): Promise<void> {
     });
     const syncProfile = resolveSyncProfileForMimeType(metadata.mimeType);
     if (parsed.command === "metadata") {
-      printJson(metadata);
+      printJsonSuccess(parsed, metadata);
       return;
     }
 
-    printJson({
+    printJsonSuccess(parsed, {
       fileId: metadata.id,
       title: metadata.name,
       sourceMimeType: metadata.mimeType,
@@ -371,7 +503,7 @@ async function main(): Promise<void> {
         throw new Error("This export did not produce a single text output.");
       }
       if (parsed.flags.json) {
-        printJson({
+        printJsonSuccess(parsed, {
           outputKind: exportResult.outputKind,
           text: exportResult.primaryText
         });
@@ -382,7 +514,7 @@ async function main(): Promise<void> {
     }
 
     if (parsed.flags.json) {
-      printJson({
+      printJsonSuccess(parsed, {
         targetPath: resolvedOutputPath,
         outputKind: exportResult.outputKind,
         message: exportResult.message,
@@ -405,7 +537,7 @@ async function main(): Promise<void> {
     const selection = await syncManager.resolveSelectionFromInput(rawInput, localPath);
     const outcome = await syncManager.linkFile(localPath, selection, { force: parsed.flags.force });
     if (parsed.flags.json) {
-      printJson({
+      printJsonSuccess(parsed, {
         targetPath: localPath,
         manifestPath: manifestStore.getManifestPath(),
         outcome
@@ -424,7 +556,7 @@ async function main(): Promise<void> {
       const linkedFiles = await manifestStore.listLinkedFiles();
       const files = await Promise.all(linkedFiles.map((item) => describeLinkedFile(manifestStore, item.filePath)));
       if (parsed.flags.json) {
-        printJson({
+        printJsonSuccess(parsed, {
           rootPath: workspaceRoot,
           manifestPath: manifestStore.getManifestPath(),
           count: files.length,
@@ -443,7 +575,7 @@ async function main(): Promise<void> {
     const localPath = resolveLocalPath(workspaceRoot, localPathArg);
     const status = await describeLinkedFile(manifestStore, localPath);
     if (parsed.flags.json) {
-      printJson(status);
+      printJsonSuccess(parsed, status);
     } else {
       printText(
         status.linked
@@ -458,7 +590,7 @@ async function main(): Promise<void> {
     if (parsed.flags.all) {
       const summary = await syncManager.syncAll({ force: parsed.flags.force });
       if (parsed.flags.json) {
-        printJson({
+        printJsonSuccess(parsed, {
           rootPath: workspaceRoot,
           manifestPath: manifestStore.getManifestPath(),
           ...summary
@@ -479,7 +611,7 @@ async function main(): Promise<void> {
     const localPath = resolveLocalPath(workspaceRoot, localPathArg);
     const outcome = await syncManager.syncFile(localPath, { force: parsed.flags.force });
     if (parsed.flags.json) {
-      printJson({
+      printJsonSuccess(parsed, {
         targetPath: localPath,
         outcome
       });
@@ -502,7 +634,7 @@ async function main(): Promise<void> {
       removeGeneratedFiles: parsed.flags.removeGenerated
     });
     if (parsed.flags.json) {
-      printJson({
+      printJsonSuccess(parsed, {
         targetPath: localPath,
         removed
       });
@@ -515,16 +647,19 @@ async function main(): Promise<void> {
   printUsage();
 }
 
+const parsedInput = parseCliInput(process.argv.slice(2));
+
 void main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
   if (process.argv.slice(2).includes("--json")) {
     printJson({
-      error: {
-        message
-      }
+      ok: false,
+      contractVersion: CLI_JSON_CONTRACT_VERSION,
+      command: getCommandLabel(parsedInput),
+      error: buildCliErrorPayload(error)
     });
   } else {
-    process.stderr.write(`${message}\n`);
+    const payload = buildCliErrorPayload(error);
+    process.stderr.write(`${payload.message}\n`);
   }
   process.exitCode = 1;
 });

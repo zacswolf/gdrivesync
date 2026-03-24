@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizeManifest } from "../../src/manifestSchema";
+import { inspectManifestValue, normalizeManifest, parseManifestText } from "../../src/manifestSchema";
+import { CorruptStateError } from "../../src/stateErrors";
 import { getDefaultSyncProfile } from "../../src/syncProfiles";
 
 describe("normalizeManifest", () => {
@@ -88,5 +89,32 @@ describe("normalizeManifest", () => {
         relativePath: "docs/spec.assets/image1.png"
       }
     ]);
+  });
+
+  it("reports dropped invalid entries during manifest inspection", () => {
+    const inspection = inspectManifestValue({
+      version: 3,
+      files: {
+        "docs/spec.md": {
+          profileId: "google-doc-markdown",
+          fileId: "abc123",
+          sourceUrl: "https://docs.google.com/document/d/abc123/edit",
+          title: "Spec",
+          syncOnOpen: false
+        },
+        "docs/bad.md": {
+          profileId: "google-doc-markdown",
+          title: "Missing file ID"
+        }
+      }
+    });
+
+    expect(inspection.rawEntryCount).toBe(2);
+    expect(inspection.normalizedEntryCount).toBe(1);
+    expect(inspection.droppedEntryCount).toBe(1);
+  });
+
+  it("throws a corruption error for invalid manifest JSON", () => {
+    expect(() => parseManifestText("{not-json", "/tmp/.gdrivesync.json")).toThrowError(CorruptStateError);
   });
 });

@@ -9,6 +9,7 @@ GDriveSync is most useful to agents when it is treated like a stateful bridge be
 - Use `gdrivesync link ...` when the agent wants durable workspace state that can be refreshed later.
 - Use `gdrivesync status --all --json --cwd <workspace>` to discover linked files before a batch run.
 - Use `gdrivesync sync --all --json --cwd <workspace>` for batch refreshes.
+- Use `gdrivesync doctor --json --cwd <workspace>` before large automated runs if the agent needs to validate auth and manifest health.
 - Always pass `--cwd` explicitly in automation instead of relying on the current shell directory.
 - Prefer `--json` whenever the result will be parsed or routed to other tools.
 
@@ -20,8 +21,12 @@ GDriveSync is most useful to agents when it is treated like a stateful bridge be
 ## Output expectations
 
 - Normal human output is concise text intended for terminals.
-- `--json` returns structured output for machine consumers.
-- In `--json` mode, top-level command failures are also emitted as JSON.
+- `--json` returns a stable envelope with:
+  - `ok`
+  - `contractVersion`
+  - `command`
+  - `data` on success or `error` on failure
+- In `--json` mode, top-level command failures are also emitted as structured JSON with machine-readable error codes.
 
 ## Suggested agent workflows
 
@@ -43,6 +48,12 @@ Refresh all linked files in a workspace:
 gdrivesync sync --all --cwd "./workspace" --json
 ```
 
+Validate workspace and auth health:
+
+```bash
+gdrivesync doctor --cwd "./workspace" --json
+```
+
 Export a single file directly to stdout:
 
 ```bash
@@ -62,3 +73,4 @@ gdrivesync export "https://docs.google.com/presentation/d/<file-id>/edit" "./dec
 - Expect CSV or folder-of-CSV outputs for Sheets and XLSX.
 - Treat Google Drive as the source of truth. This project is one-way by design.
 - If an agent wants to preserve local edits, it should inspect sync results and respect cancelled outcomes unless it intentionally reruns with `--force`.
+- If the CLI reports `MANIFEST_CORRUPT` or `AUTH_SESSION_CORRUPT`, the supported recovery path is `gdrivesync doctor --repair`.

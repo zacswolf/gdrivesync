@@ -3,7 +3,7 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
-import { normalizeManifest } from "./manifestSchema";
+import { parseManifestText } from "./manifestSchema";
 import { LinkedFileContext, LinkedFileEntry, SyncManifest } from "./types";
 import { fromManifestKey, toManifestKey } from "./utils/paths";
 
@@ -49,7 +49,7 @@ export class ManifestStore {
   async readManifest(folderPath: string): Promise<SyncManifest> {
     try {
       const rawValue = await readFile(this.getManifestPath(folderPath), "utf8");
-      return normalizeManifest(JSON.parse(rawValue));
+      return parseManifestText(rawValue, this.getManifestPath(folderPath)).manifest;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return defaultManifest();

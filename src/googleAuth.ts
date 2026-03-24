@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { URLSearchParams } from "node:url";
 
 import { GoogleReleaseConfig, OAuthStatePayload, StoredOAuthSession, TokenStore } from "./types";
+import { CorruptStateError } from "./stateErrors";
 import { decodeBase64UrlJson, encodeBase64UrlJson } from "./utils/base64url";
 import { createLocalCallbackServer } from "./utils/localCallbackServer";
 import { hasRequiredScopes } from "./utils/oauthScopes";
@@ -101,7 +102,16 @@ export class GoogleAuthManager {
 
   async completeAuthorizationCodeGrant(code: string, redirectUri: string, codeVerifier?: string): Promise<void> {
     const config = this.configProvider();
-    const existingSession = await this.tokenStore.get();
+    let existingSession: StoredOAuthSession | undefined;
+    try {
+      existingSession = await this.tokenStore.get();
+    } catch (error) {
+      if (error instanceof CorruptStateError) {
+        await this.tokenStore.delete();
+      } else {
+        throw error;
+      }
+    }
     const nextSession = await this.exchangeAuthorizationCode(
       code,
       codeVerifier,
@@ -114,7 +124,16 @@ export class GoogleAuthManager {
 
   async ensureSignedIn(): Promise<void> {
     const config = this.configProvider();
-    const session = await this.tokenStore.get();
+    let session: StoredOAuthSession | undefined;
+    try {
+      session = await this.tokenStore.get();
+    } catch (error) {
+      if (error instanceof CorruptStateError) {
+        await this.tokenStore.delete();
+      } else {
+        throw error;
+      }
+    }
     if (session && hasRequiredScopes(session.scope, config.scope)) {
       return;
     }
@@ -151,7 +170,18 @@ export class GoogleAuthManager {
   }
 
   async signOut(): Promise<void> {
-    const session = await this.tokenStore.get();
+    let session: StoredOAuthSession | undefined;
+    try {
+      session = await this.tokenStore.get();
+    } catch (error) {
+      if (error instanceof CorruptStateError) {
+        await this.tokenStore.delete();
+        return;
+      }
+
+      throw error;
+    }
+
     if (session?.refreshToken || session?.accessToken) {
       const token = session.refreshToken || session.accessToken;
       const revokeUrl = new URL("https://oauth2.googleapis.com/revoke");
