@@ -1,10 +1,10 @@
-import { getDefaultSyncProfile, getSyncProfile, isSyncProfileId } from "./syncProfiles";
+import { getSyncProfile, isSyncProfileId } from "./syncProfiles";
 import { CorruptStateError } from "./stateErrors";
 import { GeneratedFileRecord, SyncManifest, SyncOutputKind } from "./types";
 
 function defaultManifest(): SyncManifest {
   return {
-    version: 3,
+    version: 4,
     files: {}
   };
 }
@@ -13,20 +13,11 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
-function toStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-
-  const items = value.filter(isString);
-  return items.length > 0 ? items : undefined;
-}
-
 function normalizeOutputKind(value: unknown): SyncOutputKind {
   return value === "directory" ? "directory" : "file";
 }
 
-function normalizeGeneratedFiles(value: unknown, fallbackPaths: string[] | undefined): GeneratedFileRecord[] | undefined {
+function normalizeGeneratedFiles(value: unknown): GeneratedFileRecord[] | undefined {
   if (Array.isArray(value)) {
     const items: GeneratedFileRecord[] = [];
     for (const candidate of value) {
@@ -49,12 +40,7 @@ function normalizeGeneratedFiles(value: unknown, fallbackPaths: string[] | undef
       return items;
     }
   }
-
-  if (!fallbackPaths || fallbackPaths.length === 0) {
-    return undefined;
-  }
-
-  return fallbackPaths.map((relativePath) => ({ relativePath }));
+  return undefined;
 }
 
 function countRawManifestEntries(rawValue: unknown): number {
@@ -79,8 +65,16 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
   }
 
   const candidate = rawValue as { version?: unknown; files?: unknown };
+  if (candidate.version !== 4) {
+    throw new CorruptStateError(
+      "manifest",
+      "manifest",
+      `The saved GDriveSync manifest uses unsupported schema version ${String(candidate.version)}.`
+    );
+  }
+
   const manifest: SyncManifest = {
-    version: 3,
+    version: 4,
     files: {}
   };
 
@@ -95,10 +89,13 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
     }
 
     const entry = value as Record<string, unknown>;
-    const profileId = isSyncProfileId(entry.profileId) ? entry.profileId : getDefaultSyncProfile().id;
+    if (!isSyncProfileId(entry.profileId)) {
+      continue;
+    }
+
+    const profileId = entry.profileId;
     const profile = getSyncProfile(profileId);
-    const fileId = isString(entry.fileId) ? entry.fileId : isString(entry.docId) ? entry.docId : undefined;
-    const generatedFilePaths = toStringArray(entry.generatedFilePaths) || toStringArray(entry.generatedAssetPaths);
+    const fileId = isString(entry.fileId) ? entry.fileId : undefined;
     if (!fileId || !isString(entry.sourceUrl) || !isString(entry.title) || typeof entry.syncOnOpen !== "boolean") {
       continue;
     }
@@ -113,9 +110,10 @@ export function normalizeManifest(rawValue: unknown): SyncManifest {
       outputKind: normalizeOutputKind(entry.outputKind),
       title: entry.title,
       syncOnOpen: entry.syncOnOpen,
+      accountId: isString(entry.accountId) ? entry.accountId : undefined,
+      accountEmail: isString(entry.accountEmail) ? entry.accountEmail : undefined,
       resourceKey: isString(entry.resourceKey) ? entry.resourceKey : undefined,
-      generatedFiles: normalizeGeneratedFiles(entry.generatedFiles || entry.generatedAssets, generatedFilePaths),
-      generatedFilePaths,
+      generatedFiles: normalizeGeneratedFiles(entry.generatedFiles),
       lastSyncedAt: isString(entry.lastSyncedAt) ? entry.lastSyncedAt : undefined,
       lastDriveVersion: isString(entry.lastDriveVersion) ? entry.lastDriveVersion : undefined,
       lastLocalHash: isString(entry.lastLocalHash) ? entry.lastLocalHash : undefined
@@ -139,7 +137,17 @@ export function inspectManifestValue(rawValue: unknown): ManifestInspection {
 
 export function parseManifestText(rawValue: string, stateLocation: string): ManifestInspection {
   try {
-    return inspectManifestValue(JSON.parse(rawValue));
+    const parsed = JSON.parse(rawValue);
+    if (parsed && typeof parsed === "object" && (parsed as { version?: unknown }).version !== 4) {
+      throw new CorruptStateError(
+        "manifest",
+        stateLocation,
+        `The saved GDriveSync manifest at ${stateLocation} uses unsupported schema version ${String(
+          (parsed as { version?: unknown }).version
+        )}.`
+      );
+    }
+    return inspectManifestValue(parsed);
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new CorruptStateError("manifest", stateLocation);

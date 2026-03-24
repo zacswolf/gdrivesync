@@ -14,8 +14,8 @@ import {
   resolveSyncProfileForMimeType
 } from "./syncProfiles";
 import { SyncManager, SyncProgressReporter } from "./syncManager";
-import { SecretStorageTokenStore } from "./tokenStores";
-import { ParsedDocInput, PickerSelection, SyncOutcome } from "./types";
+import { SecretStorageOAuthStateStore } from "./tokenStores";
+import { ConnectedGoogleAccount, ParsedDocInput, PickerSelection, SyncOutcome } from "./types";
 import { SlidesClient } from "./slidesClient";
 import { parseGoogleDocInput, extractGoogleResourceKey } from "./utils/docUrl";
 import { normalizeResolvedGoogleFileSelection, shouldRecoverAccessWithPicker } from "./utils/googleFileSelection";
@@ -110,7 +110,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const manifestStore = new ManifestStore();
   const authManager = new GoogleAuthManager(
-    new SecretStorageTokenStore(context.secrets),
+    new SecretStorageOAuthStateStore(context.secrets),
     resolveExtensionGoogleConfig,
     async (url) => vscode.env.openExternal(vscode.Uri.parse(url))
   );
@@ -155,38 +155,99 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
   }
 
-  async function getPickerLoginHint(): Promise<string | undefined> {
-    const configuredHint = resolveExtensionGoogleConfig().loginHint;
-    if (configuredHint) {
-      return configuredHint;
+  function formatAccountLabel(account: ConnectedGoogleAccount): string {
+    return account.accountEmail || account.accountDisplayName || account.accountId;
+  }
+
+  function shouldTryAnotherAccount(error: unknown): boolean {
+    if (error instanceof PickerGrantRequiredError) {
+      return true;
     }
 
-    try {
-      const accessToken = await authManager.getAccessToken();
-      const currentUser = await driveClient.getCurrentUser(accessToken);
-      return currentUser?.emailAddress;
-    } catch {
-      return undefined;
-    }
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes("cannot be refreshed") ||
+      message.includes("No connected Google account matches") ||
+      message.includes("cannot access file") ||
+      message.includes("cannot access Google file") ||
+      message.includes("missing the required Drive read-only scope")
+    );
   }
 
   async function getConnectedAccountEmail(): Promise<string | undefined> {
-    try {
-      const accessToken = await authManager.getAccessToken();
-      const currentUser = await driveClient.getCurrentUser(accessToken);
-      return currentUser?.emailAddress || resolveExtensionGoogleConfig().loginHint;
-    } catch {
-      return resolveExtensionGoogleConfig().loginHint;
-    }
+    const defaultAccount = await authManager.getDefaultAccount().catch(() => undefined);
+    return defaultAccount?.accountEmail || resolveExtensionGoogleConfig().loginHint;
   }
 
-  async function buildAccessDeniedMessage(fileId: string): Promise<string> {
-    const connectedAccountEmail = await getConnectedAccountEmail();
-    if (connectedAccountEmail) {
-      return `The connected Google account (${connectedAccountEmail}) cannot access file ${fileId}. Share it with that account, or sign out and sign back in with a Google account that can read it.`;
+  async function chooseConnectedAccount(
+    options: {
+      title: string;
+      includeConnectAnother?: boolean;
+      includeDisconnectAll?: boolean;
+    }
+  ): Promise<ConnectedGoogleAccount | "connect-another" | "disconnect-all" | undefined> {
+    const accounts = await authManager.listAccounts();
+    if (accounts.length === 0) {
+      return undefined;
+    }
+    if (accounts.length === 1 && !options.includeConnectAnother && !options.includeDisconnectAll) {
+      return accounts[0];
     }
 
-    return `The connected Google account cannot access file ${fileId}. Share it with that account, or sign out and sign back in with a Google account that can read it.`;
+    const defaultAccount = await authManager.getDefaultAccount();
+    const items: Array<vscode.QuickPickItem & { account?: ConnectedGoogleAccount; action?: "connect-another" | "disconnect-all" }> =
+      accounts.map((account) => ({
+        label: formatAccountLabel(account),
+        description: defaultAccount?.accountId === account.accountId ? "Default" : undefined,
+        detail: account.accountDisplayName && account.accountDisplayName !== account.accountEmail ? account.accountDisplayName : undefined,
+        account
+      }));
+
+    if (options.includeConnectAnother) {
+      items.push({
+        label: "Connect another Google account…",
+        action: "connect-another"
+      });
+    }
+
+    if (options.includeDisconnectAll) {
+      items.push({
+        label: "Disconnect all Google accounts",
+        action: "disconnect-all"
+      });
+    }
+
+    const selection = await vscode.window.showQuickPick(items, {
+      placeHolder: options.title
+    });
+    if (!selection) {
+      return undefined;
+    }
+
+    return selection.account || selection.action;
+  }
+
+  async function chooseAccountForPicker(): Promise<ConnectedGoogleAccount | undefined> {
+    const selection = await chooseConnectedAccount({
+      title: "Choose the Google account to use for Google Picker",
+      includeConnectAnother: true
+    });
+
+    if (selection === "connect-another") {
+      const connectedAccount = await authManager.connectAccount();
+      return connectedAccount;
+    }
+
+    return typeof selection === "string" ? undefined : selection;
+  }
+
+  async function buildAccessDeniedMessage(fileId: string, account?: ConnectedGoogleAccount): Promise<string> {
+    const connectedAccountEmail = account?.accountEmail || (await getConnectedAccountEmail());
+    if (connectedAccountEmail) {
+      return `The connected Google account (${connectedAccountEmail}) cannot access file ${fileId}. Share it with that account, or connect a Google account that can read it.`;
+    }
+
+    return `The connected Google account cannot access file ${fileId}. Share it with that account, or connect a Google account that can read it.`;
   }
 
   function getTargetTypeDescription(profiles = getSupportedSyncProfiles()): string {
@@ -322,45 +383,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusBarItem.show();
   }
 
-  async function ensureSignedIn(): Promise<void> {
+  async function ensureConnectedAccount(): Promise<void> {
     await ensureTrustedWorkspace();
     await ensureDesktopConfig();
-    await authManager.ensureSignedIn();
+    await authManager.ensureConnected();
   }
 
   async function resolveSelectionFromInput(
     parsedInput: ParsedDocInput,
     allowedProfiles = getSupportedSyncProfiles()
   ): Promise<PickerSelection> {
-    const accessToken = await authManager.getAccessToken();
     const parsedResourceKey = parsedInput.resourceKey || extractGoogleResourceKey(parsedInput.sourceUrl);
-    const metadata = await driveClient.getFileMetadata(accessToken, {
-      fileId: parsedInput.fileId,
-      resourceKey: parsedResourceKey,
-      expectedMimeTypes: allowedProfiles.map((profile) => profile.sourceMimeType),
-      sourceTypeLabel: "supported Google file"
-    });
-    const resolvedProfile = resolveSyncProfileForMimeType(metadata.mimeType);
-    if (!resolvedProfile || !allowedProfiles.some((profile) => profile.id === resolvedProfile.id)) {
-      throw new Error(`This Google file cannot sync to the selected ${getTargetTypeDescription(allowedProfiles)} target.`);
+    const candidateAccounts = await authManager.getAccountsInPriorityOrder();
+    let lastError: unknown;
+
+    for (const account of candidateAccounts) {
+      try {
+        const { accessToken } = await authManager.getAccessToken(account.accountId);
+        const metadata = await driveClient.getFileMetadata(accessToken, {
+          fileId: parsedInput.fileId,
+          resourceKey: parsedResourceKey,
+          expectedMimeTypes: allowedProfiles.map((profile) => profile.sourceMimeType),
+          sourceTypeLabel: "supported Google file"
+        });
+        const resolvedProfile = resolveSyncProfileForMimeType(metadata.mimeType);
+        if (!resolvedProfile || !allowedProfiles.some((profile) => profile.id === resolvedProfile.id)) {
+          throw new Error(`This Google file cannot sync to the selected ${getTargetTypeDescription(allowedProfiles)} target.`);
+        }
+
+        return {
+          profileId: resolvedProfile.id,
+          fileId: metadata.id,
+          title: metadata.name,
+          sourceUrl: metadata.webViewLink || resolvedProfile.buildSourceUrl(metadata.id),
+          sourceMimeType: metadata.mimeType,
+          resourceKey: metadata.resourceKey || parsedResourceKey,
+          accountId: account.accountId,
+          accountEmail: account.accountEmail,
+          accountDisplayName: account.accountDisplayName
+        };
+      } catch (error) {
+        lastError = error;
+        if (!shouldTryAnotherAccount(error)) {
+          throw error;
+        }
+      }
     }
 
-    return {
-      profileId: resolvedProfile.id,
-      fileId: metadata.id,
-      title: metadata.name,
-      sourceUrl: metadata.webViewLink || resolvedProfile.buildSourceUrl(metadata.id),
-      sourceMimeType: metadata.mimeType,
-      resourceKey: metadata.resourceKey || parsedResourceKey
-    };
+    throw lastError || new Error("No connected Google account can access that file.");
   }
 
   async function selectDocument(allowedProfiles = getSupportedSyncProfiles()): Promise<PickerSelection | undefined> {
     const pickerOptions = getPickerOptions(allowedProfiles);
-    const pickerOptionsWithHint = {
-      ...pickerOptions,
-      loginHint: await getPickerLoginHint()
-    };
     const selectionMode = await vscode.window.showQuickPick(
       [
         {
@@ -383,10 +457,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (selectionMode.label === "Select from Google Drive") {
-      const pickedFile = await pickerClient.pickDocument(pickerOptionsWithHint);
-      return pickedFile
-        ? normalizeResolvedGoogleFileSelection(pickedFile, allowedProfiles, getTargetTypeDescription(allowedProfiles))
-        : undefined;
+      const pickerAccount = await chooseAccountForPicker();
+      if (!pickerAccount) {
+        return undefined;
+      }
+
+      const pickedFile = await pickerClient.pickDocument(
+        {
+          ...pickerOptions,
+          loginHint: pickerAccount.accountEmail
+        }
+      );
+      if (!pickedFile) {
+        return undefined;
+      }
+
+      const normalizedSelection = normalizeResolvedGoogleFileSelection(
+        pickedFile,
+        allowedProfiles,
+        getTargetTypeDescription(allowedProfiles)
+      );
+      const { accessToken } = await authManager.getAccessToken(pickerAccount.accountId);
+      await driveClient.getFileMetadata(accessToken, {
+        fileId: normalizedSelection.fileId,
+        resourceKey: normalizedSelection.resourceKey,
+        expectedMimeTypes: allowedProfiles.map((profile) => profile.sourceMimeType),
+        sourceTypeLabel: "supported Google file"
+      });
+      return {
+        ...normalizedSelection,
+        accountId: pickerAccount.accountId,
+        accountEmail: pickerAccount.accountEmail,
+        accountDisplayName: pickerAccount.accountDisplayName
+      };
     }
 
     const parsedInput = await promptForGoogleFileInput();
@@ -401,10 +504,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showInformationMessage(
           `That shared Google file may need extra link access details. Opening Google Picker to recover them…`
         );
-        const pickedFile = await pickerClient.pickDocument(pickerOptionsWithHint, parsedInput);
-        return pickedFile
-          ? normalizeResolvedGoogleFileSelection(pickedFile, allowedProfiles, getTargetTypeDescription(allowedProfiles))
-          : undefined;
+        const pickerAccount = await chooseAccountForPicker();
+        if (!pickerAccount) {
+          return undefined;
+        }
+        const pickedFile = await pickerClient.pickDocument(
+          {
+            ...pickerOptions,
+            loginHint: pickerAccount.accountEmail
+          },
+          parsedInput
+        );
+        if (!pickedFile) {
+          return undefined;
+        }
+        const normalizedSelection = normalizeResolvedGoogleFileSelection(
+          pickedFile,
+          allowedProfiles,
+          getTargetTypeDescription(allowedProfiles)
+        );
+        const { accessToken } = await authManager.getAccessToken(pickerAccount.accountId);
+        await driveClient.getFileMetadata(accessToken, {
+          fileId: normalizedSelection.fileId,
+          resourceKey: normalizedSelection.resourceKey,
+          expectedMimeTypes: allowedProfiles.map((profile) => profile.sourceMimeType),
+          sourceTypeLabel: "supported Google file"
+        });
+        return {
+          ...normalizedSelection,
+          accountId: pickerAccount.accountId,
+          accountEmail: pickerAccount.accountEmail,
+          accountDisplayName: pickerAccount.accountDisplayName
+        };
       }
 
       if (error instanceof PickerGrantRequiredError) {
@@ -416,7 +547,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function linkLocalFile(targetUri?: vscode.Uri): Promise<void> {
-    await ensureSignedIn();
+    await ensureConnectedAccount();
     const localFileUri = getTargetLocalFileUri(targetUri);
     const existingLink = await manifestStore.getLinkedFile(localFileUri);
     if (existingLink?.matchedOutputKind === "generated") {
@@ -465,7 +596,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function importGoogleFile(): Promise<void> {
-    await ensureSignedIn();
+    await ensureConnectedAccount();
     const selection = await selectDocument(getSupportedSyncProfiles());
     if (!selection) {
       return;
@@ -508,7 +639,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   async function syncCurrentFile(targetUri?: vscode.Uri): Promise<void> {
-    await ensureSignedIn();
+    await ensureConnectedAccount();
     const localFileUri = getTargetLocalFileUri(targetUri);
     const linkedFile = await manifestStore.getLinkedFile(localFileUri);
     const baseTargetUri = linkedFile ? vscode.Uri.file(fromManifestKey(linkedFile.folderPath, linkedFile.key)) : localFileUri;
@@ -539,6 +670,121 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await refreshUi();
     if (removed) {
       void vscode.window.showInformationMessage("The file is no longer linked to Google.");
+    }
+  }
+
+  async function connectGoogleAccount(): Promise<void> {
+    await ensureTrustedWorkspace();
+    await ensureDesktopConfig();
+    const connectedAccount = await authManager.connectAccount();
+    await refreshUi();
+    void vscode.window.showInformationMessage(`Connected ${formatAccountLabel(connectedAccount)}.`);
+  }
+
+  async function disconnectGoogleAccount(): Promise<void> {
+    await ensureTrustedWorkspace();
+    const selection = await chooseConnectedAccount({
+      title: "Choose the Google account to disconnect",
+      includeDisconnectAll: true
+    });
+    if (!selection) {
+      return;
+    }
+
+    if (selection === "disconnect-all") {
+      const disconnectedCount = await authManager.disconnectAll();
+      await refreshUi();
+      void vscode.window.showInformationMessage(
+        disconnectedCount === 1 ? "Disconnected 1 Google account." : `Disconnected ${disconnectedCount} Google accounts.`
+      );
+      return;
+    }
+
+    if (selection === "connect-another") {
+      return;
+    }
+
+    const disconnectedAccount = await authManager.disconnectAccount(selection.accountId);
+    await refreshUi();
+    if (disconnectedAccount) {
+      void vscode.window.showInformationMessage(`Disconnected ${formatAccountLabel(disconnectedAccount)}.`);
+    }
+  }
+
+  async function switchDefaultGoogleAccount(): Promise<void> {
+    await ensureTrustedWorkspace();
+    const selection = await chooseConnectedAccount({
+      title: "Choose the default Google account"
+    });
+    if (!selection || typeof selection === "string") {
+      return;
+    }
+
+    const account = await authManager.setDefaultAccount(selection.accountId);
+    await refreshUi();
+    void vscode.window.showInformationMessage(`Default Google account is now ${formatAccountLabel(account)}.`);
+  }
+
+  async function showGoogleAccounts(): Promise<void> {
+    await ensureTrustedWorkspace();
+    const accounts = await authManager.listAccounts();
+    if (accounts.length === 0) {
+      const selection = await vscode.window.showInformationMessage("No Google accounts are connected yet.", "Connect Account");
+      if (selection === "Connect Account") {
+        await connectGoogleAccount();
+      }
+      return;
+    }
+
+    const defaultAccount = await authManager.getDefaultAccount();
+    const selection = await vscode.window.showQuickPick(
+      [
+        ...accounts.map((account) => ({
+          label: formatAccountLabel(account),
+          description: defaultAccount?.accountId === account.accountId ? "Default" : undefined,
+          detail: account.accountDisplayName && account.accountDisplayName !== account.accountEmail ? account.accountDisplayName : undefined,
+          action: "account" as const,
+          account
+        })),
+        {
+          label: "Connect another Google account…",
+          action: "connect" as const
+        },
+        {
+          label: "Switch default Google account…",
+          action: "switch" as const
+        },
+        {
+          label: "Disconnect Google account…",
+          action: "disconnect" as const
+        }
+      ],
+      {
+        placeHolder: "Manage connected Google accounts"
+      }
+    );
+
+    if (!selection) {
+      return;
+    }
+
+    if (selection.action === "connect") {
+      await connectGoogleAccount();
+      return;
+    }
+    if (selection.action === "switch") {
+      await switchDefaultGoogleAccount();
+      return;
+    }
+    if (selection.action === "disconnect") {
+      await disconnectGoogleAccount();
+      return;
+    }
+
+    if (selection.action === "account") {
+      void vscode.window.showInformationMessage(
+        `${formatAccountLabel(selection.account)}${defaultAccount?.accountId === selection.account.accountId ? " (default)" : ""}`
+      );
     }
   }
 
@@ -613,26 +859,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ],
       codeLensProvider
     ),
-    vscode.commands.registerCommand("gdocSync.signIn", async () => {
+    vscode.commands.registerCommand("gdocSync.connectGoogleAccount", async () => {
       try {
-        await ensureTrustedWorkspace();
-        await ensureDesktopConfig();
-        await authManager.signIn();
-        await refreshUi();
-        const connectedAccountEmail = await getConnectedAccountEmail();
-        void vscode.window.showInformationMessage(
-          connectedAccountEmail ? `GDriveSync is now signed in as ${connectedAccountEmail}.` : "GDriveSync is now signed in."
-        );
+        await connectGoogleAccount();
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
-    vscode.commands.registerCommand("gdocSync.signOut", async () => {
+    vscode.commands.registerCommand("gdocSync.disconnectGoogleAccount", async () => {
       try {
-        await ensureTrustedWorkspace();
-        await authManager.signOut();
-        await refreshUi();
-        void vscode.window.showInformationMessage("Signed out of GDriveSync.");
+        await disconnectGoogleAccount();
+      } catch (error) {
+        void vscode.window.showErrorMessage(sanitizeError(error));
+      }
+    }),
+    vscode.commands.registerCommand("gdocSync.switchDefaultGoogleAccount", async () => {
+      try {
+        await switchDefaultGoogleAccount();
+      } catch (error) {
+        void vscode.window.showErrorMessage(sanitizeError(error));
+      }
+    }),
+    vscode.commands.registerCommand("gdocSync.googleAccounts", async () => {
+      try {
+        await showGoogleAccounts();
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
@@ -660,7 +910,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("gdocSync.syncAll", async () => {
       try {
-        await ensureSignedIn();
+        await ensureConnectedAccount();
         const summary = await withSyncProgress("Syncing all linked files…", (progress) => syncManager.syncAll({ progress }));
         await showSyncAllOutcome(summary);
       } catch (error) {

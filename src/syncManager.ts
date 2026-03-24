@@ -13,6 +13,7 @@ import { convertSlidesApiPresentationToMarp } from "./slidesApiPresentationConve
 import { SlidesClient } from "./slidesClient";
 import { getSyncProfile, SyncProfile } from "./syncProfiles";
 import {
+  ConnectedGoogleAccount,
   GeneratedFilePayload,
   GeneratedFileRecord,
   LinkedFileContext,
@@ -65,8 +66,9 @@ export class SyncManager {
       resourceKey: selection.resourceKey,
       title: selection.title,
       syncOnOpen,
+      accountId: selection.accountId,
+      accountEmail: selection.accountEmail,
       generatedFiles: undefined,
-      generatedFilePaths: undefined,
       lastDriveVersion: undefined,
       lastLocalHash: undefined,
       lastSyncedAt: undefined
@@ -192,13 +194,13 @@ export class SyncManager {
     options?: SyncFileOptions
   ): Promise<SyncOutcome> {
     const profile = getSyncProfile(linkedFile.entry.profileId);
-    const accessToken = await this.authManager.getAccessToken();
     const baseTargetUri = this.getBaseTargetUri(linkedFile);
     options?.progress?.report("Checking Google metadata…");
-    const metadata = await this.readLinkedFileMetadataWithHelpfulError(accessToken, linkedFile, profile);
+    const access = await this.resolveLinkedFileAccess(linkedFile, profile);
+    const { account, accessToken, metadata, rebound } = access;
 
     if (profile.targetFamily === "csv") {
-      return this.doSpreadsheetSync(baseTargetUri, linkedFile, profile, metadata, accessToken, options);
+      return this.doSpreadsheetSync(baseTargetUri, linkedFile, profile, metadata, accessToken, account, rebound, options);
     }
 
     const localText = await this.readLocalFileText(baseTargetUri);
@@ -258,6 +260,8 @@ export class SyncManager {
     await this.manifestStore.updateLinkedFile(baseTargetUri, (entry) => ({
       ...entry,
       outputKind: "file",
+      accountId: account.accountId,
+      accountEmail: account.accountEmail,
       title: metadata.name,
       sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
       sourceMimeType: metadata.mimeType,
@@ -266,7 +270,6 @@ export class SyncManager {
         relativePath: asset.relativePath,
         contentHash: asset.contentHash
       })),
-      generatedFilePaths: preparedContent.generatedAssetPaths,
       lastDriveVersion: metadata.version,
       lastLocalHash: nextHash,
       lastSyncedAt: new Date().toISOString()
@@ -278,30 +281,11 @@ export class SyncManager {
 
     return {
       status: "synced",
-      message: `Synced ${path.basename(baseTargetUri.fsPath)}.`
+      message: rebound
+        ? `Synced ${path.basename(baseTargetUri.fsPath)} and rebound it to ${account.accountEmail || account.accountId}.`
+        : `Synced ${path.basename(baseTargetUri.fsPath)}.`,
+      rebind: rebound
     };
-  }
-
-  private async readLinkedFileMetadataWithHelpfulError(accessToken: string, linkedFile: LinkedFileContext, profile: SyncProfile) {
-    try {
-      return await this.driveClient.getFileMetadata(accessToken, {
-        fileId: linkedFile.entry.fileId,
-        resourceKey: linkedFile.entry.resourceKey,
-        expectedMimeTypes: [linkedFile.entry.sourceMimeType],
-        sourceTypeLabel: profile.sourceTypeLabel
-      });
-    } catch (error) {
-      if (error instanceof PickerGrantRequiredError) {
-        const currentUser = await this.driveClient.getCurrentUser(accessToken);
-        if (currentUser?.emailAddress) {
-          throw new Error(
-            `The connected Google account (${currentUser.emailAddress}) cannot read file ${linkedFile.entry.fileId} through the Drive API. If this is a shared-link file, it may still need a resource key; otherwise sign out and sign back in with the account that can read it.`
-          );
-        }
-      }
-
-      throw error;
-    }
   }
 
   private async doSpreadsheetSync(
@@ -310,6 +294,8 @@ export class SyncManager {
     profile: SyncProfile,
     metadata: { id: string; name: string; mimeType: string; version: string; resourceKey?: string; webViewLink?: string },
     accessToken: string,
+    account: ConnectedGoogleAccount,
+    rebound: SyncOutcome["rebind"] | undefined,
     options?: SyncFileOptions
   ): Promise<SyncOutcome> {
     const outputState = await this.inspectSpreadsheetOutputState(baseTargetUri, linkedFile.entry);
@@ -372,6 +358,8 @@ export class SyncManager {
     await this.manifestStore.updateLinkedFile(baseTargetUri, (entry) => ({
       ...entry,
       outputKind: workbookOutput.outputKind,
+      accountId: account.accountId,
+      accountEmail: account.accountEmail,
       title: metadata.name,
       sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
       sourceMimeType: metadata.mimeType,
@@ -382,10 +370,6 @@ export class SyncManager {
               relativePath: generatedFile.relativePath,
               contentHash: generatedFile.contentHash
             }))
-          : undefined,
-      generatedFilePaths:
-        workbookOutput.outputKind === "directory"
-          ? workbookOutput.generatedFiles.map((generatedFile) => generatedFile.relativePath)
           : undefined,
       lastDriveVersion: metadata.version,
       lastLocalHash: nextHash,
@@ -398,7 +382,10 @@ export class SyncManager {
 
     return {
       status: "synced",
-      message: syncSummary,
+      message: rebound
+        ? `${syncSummary} Rebound it to ${account.accountEmail || account.accountId}.`
+        : syncSummary,
+      rebind: rebound,
       transition:
         linkedFile.entry.outputKind !== workbookOutput.outputKind
           ? {
@@ -412,6 +399,71 @@ export class SyncManager {
             }
           : undefined
     };
+  }
+
+  private shouldTryAnotherAccount(error: unknown): boolean {
+    if (error instanceof PickerGrantRequiredError) {
+      return true;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes("cannot be refreshed") ||
+      message.includes("No connected Google account matches") ||
+      message.includes("cannot read file") ||
+      message.includes("cannot access Google file") ||
+      message.includes("missing the required Drive read-only scope")
+    );
+  }
+
+  private async resolveLinkedFileAccess(
+    linkedFile: LinkedFileContext,
+    profile: SyncProfile
+  ): Promise<{
+    account: ConnectedGoogleAccount;
+    accessToken: string;
+    metadata: Awaited<ReturnType<DriveClient["getFileMetadata"]>>;
+    rebound?: SyncOutcome["rebind"];
+  }> {
+    const candidates = await this.authManager.getAccountsInPriorityOrder(linkedFile.entry.accountId);
+    let lastError: unknown;
+
+    for (const account of candidates) {
+      try {
+        const { accessToken } = await this.authManager.getAccessToken(account.accountId);
+        const metadata = await this.driveClient.getFileMetadata(accessToken, {
+          fileId: linkedFile.entry.fileId,
+          resourceKey: linkedFile.entry.resourceKey,
+          expectedMimeTypes: [linkedFile.entry.sourceMimeType],
+          sourceTypeLabel: profile.sourceTypeLabel
+        });
+        // This read-only product can safely recover a broken binding by rebinding it.
+        // Revisit this behavior if GDriveSync ever supports two-way sync.
+        const rebound =
+          linkedFile.entry.accountId && linkedFile.entry.accountId !== account.accountId
+            ? {
+                previousAccountId: linkedFile.entry.accountId,
+                previousAccountEmail: linkedFile.entry.accountEmail,
+                nextAccountId: account.accountId,
+                nextAccountEmail: account.accountEmail
+              }
+            : undefined;
+        return { account, accessToken, metadata, rebound };
+      } catch (error) {
+        lastError = error;
+        if (!this.shouldTryAnotherAccount(error)) {
+          throw error;
+        }
+      }
+    }
+
+    if (lastError instanceof PickerGrantRequiredError && linkedFile.entry.accountEmail) {
+      throw new Error(
+        `The bound Google account (${linkedFile.entry.accountEmail}) can no longer read file ${linkedFile.entry.fileId}, and no other connected account could recover it.`
+      );
+    }
+
+    throw lastError || new Error("No connected Google account can access the linked file.");
   }
 
   private async readLocalFileState(fileUri: vscode.Uri, existingText?: string): Promise<LocalFileState> {
@@ -587,11 +639,7 @@ export class SyncManager {
   }
 
   private getTrackedGeneratedFiles(entry: LinkedFileEntry): GeneratedFileRecord[] {
-    if (entry.generatedFiles && entry.generatedFiles.length > 0) {
-      return entry.generatedFiles;
-    }
-
-    return (entry.generatedFilePaths || []).map((relativePath) => ({ relativePath }));
+    return entry.generatedFiles || [];
   }
 
   private getTrackedGeneratedFilePaths(entry: LinkedFileEntry): string[] | undefined {

@@ -43,7 +43,7 @@ Agent-friendly qualities:
 - Google Sheets export to `.xlsx` and local `.csv` generation
 - Drive-hosted `.xlsx` download and local `.csv` generation
 - Workspace sidecar manifest in `.gdrivesync.json`
-- Commands for sign-in, linking, importing, syncing, auto-sync toggle, unlinking, and sign-out
+- Commands for connecting accounts, linking, importing, syncing, auto-sync toggle, unlinking, and disconnecting accounts
 - Progress notifications for manual import and sync flows in the VS Code extension
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
@@ -144,7 +144,10 @@ Current command set:
 
 ```bash
 gdrivesync auth login
-gdrivesync auth logout
+gdrivesync auth logout --account <account>
+gdrivesync auth logout --all
+gdrivesync auth list [--json]
+gdrivesync auth use <account> [--json]
 gdrivesync auth status [--json]
 gdrivesync doctor [--cwd path] [--json] [--repair]
 gdrivesync inspect <google-file-url-or-id> [--json]
@@ -159,7 +162,12 @@ gdrivesync unlink <local-path> [--cwd path] [--json] [--remove-generated]
 ```
 
 Key CLI behaviors:
+- `auth login` connects a Google account; connecting the same account again refreshes its saved session
+- `auth list` and `auth use` expose the multi-account model explicitly for agents
+- `auth logout` requires `--account` or `--all`
 - `link` immediately creates the manifest entry and runs an initial sync
+- `link` binds the local file to the account that successfully read the source file
+- pasted-link imports probe the default connected account first, then other connected accounts
 - every `--json` response uses a top-level envelope with `ok`, `contractVersion`, `command`, and either `data` or `error`
 - `status --all --json` returns manifest-aware file metadata for the whole workspace
 - `sync --all --json` returns per-file results with `synced`, `skipped`, `cancelled`, or `failed`
@@ -173,7 +181,10 @@ Examples:
 
 ```bash
 npm run cli -- auth login
+npm run cli -- auth list --json
+npm run cli -- auth use me@example.com --json
 npm run cli -- auth status --json
+npm run cli -- auth logout --account me@example.com --json
 npm run cli -- doctor --cwd ./data --json
 npm run cli -- doctor --cwd ./data --json --repair
 npm run cli -- inspect https://docs.google.com/document/d/<file-id>/edit --json
@@ -265,9 +276,23 @@ Example `doctor --json` output shape:
       "sessionFileExists": true,
       "authenticated": true,
       "sessionValid": true,
+      "accountCount": 2,
       "refreshTokenPresent": true,
       "scopeMatchesConfig": true,
-      "currentUserEmail": "me@example.com"
+      "defaultAccountId": "perm-123",
+      "defaultAccountEmail": "me@example.com",
+      "accounts": [
+        {
+          "accountId": "perm-123",
+          "accountEmail": "me@example.com",
+          "isDefault": true
+        },
+        {
+          "accountId": "perm-456",
+          "accountEmail": "work@example.com",
+          "isDefault": false
+        }
+      ]
     },
     "issues": [],
     "repair": {
@@ -288,6 +313,22 @@ If you are building agent integrations, prefer:
 
 There is also a short agent-focused usage guide in [docs/agent-cli.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/agent-cli.md).
 
+## Multi-account behavior
+
+GDriveSync supports multiple connected Google accounts in both the extension and the CLI.
+
+Extension account commands:
+- `Connect Google Account...`
+- `Disconnect Google Account...`
+- `Switch Default Google Account`
+- `Google Accounts`
+
+Default account behavior:
+- pasted Google file URLs try the default connected account first, then other connected accounts
+- Google Picker is explicit: if multiple accounts are connected, you choose which one to use
+- linked files stay pinned to their bound Google account unless that account becomes unusable
+- if a bound account is broken and another connected account can read the file, GDriveSync can recover and rebind it because sync is one-way
+
 ## State recovery
 
 If the CLI manifest or saved CLI OAuth session gets corrupted, GDriveSync now fails with explicit machine-readable error codes instead of a raw JSON parse stack. The supported recovery path is:
@@ -299,9 +340,9 @@ gdrivesync doctor --cwd ./workspace --repair
 
 `doctor --repair` backs up corrupt local CLI state before restoring a working baseline:
 - corrupt `.gdrivesync.json` manifests are backed up and replaced with a clean manifest, preserving valid entries when possible
-- corrupt CLI OAuth session files are backed up and cleared so you can sign in again cleanly
+- corrupt CLI OAuth state files are backed up and cleared so you can reconnect cleanly
 
-The VS Code extension uses SecretStorage instead of the CLI session file. If that state ever becomes corrupted, signing out and signing back in is the intended repair path.
+The VS Code extension uses SecretStorage instead of the CLI auth file. If that state ever becomes corrupted, disconnecting and reconnecting the affected Google account is the intended repair path.
 
 ## Distribution plans
 

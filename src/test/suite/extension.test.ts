@@ -10,8 +10,10 @@ suite("GDriveSync extension", () => {
 
     const commands = await vscode.commands.getCommands(true);
     const expectedCommands = [
-      "gdocSync.signIn",
-      "gdocSync.signOut",
+      "gdocSync.connectGoogleAccount",
+      "gdocSync.disconnectGoogleAccount",
+      "gdocSync.switchDefaultGoogleAccount",
+      "gdocSync.googleAccounts",
       "gdocSync.linkCurrentFile",
       "gdocSync.importGoogleDoc",
       "gdocSync.syncCurrentFile",

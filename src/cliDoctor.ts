@@ -6,9 +6,9 @@ import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { inspectManifestValue, parseManifestText } from "./manifestSchema";
 import { resolveCliGoogleConfig } from "./runtimeConfig";
-import { normalizeStoredOAuthSession } from "./sessionSchema";
+import { normalizeStoredOAuthState } from "./sessionSchema";
 import { CorruptStateError } from "./stateErrors";
-import { StoredOAuthSession } from "./types";
+import { ConnectedGoogleAccount } from "./types";
 import { fromManifestKey } from "./utils/paths";
 import { hasRequiredScopes } from "./utils/oauthScopes";
 
@@ -36,12 +36,23 @@ export interface CliDoctorReport {
     sessionFileExists: boolean;
     authenticated: boolean;
     sessionValid: boolean;
+    accountCount: number;
     refreshTokenPresent: boolean;
     scopeMatchesConfig: boolean;
+    defaultAccountId?: string;
+    defaultAccountEmail?: string;
     scope?: string;
     expiresAt?: string;
     expiresInSeconds?: number;
-    currentUserEmail?: string;
+    accounts?: Array<{
+      accountId: string;
+      accountEmail?: string;
+      accountDisplayName?: string;
+      isDefault: boolean;
+      scope?: string;
+      expiresAt?: string;
+      refreshTokenPresent: boolean;
+    }>;
     backupPath?: string;
   };
   config: {
@@ -95,6 +106,7 @@ export async function inspectCliAuthState(
     sessionFileExists,
     authenticated: false,
     sessionValid: false,
+    accountCount: 0,
     refreshTokenPresent: false,
     scopeMatchesConfig: false
   };
@@ -110,9 +122,12 @@ export async function inspectCliAuthState(
   }
 
   const rawSession = await readFile(tokenPath, "utf8");
-  let parsedSession: StoredOAuthSession;
+  let parsedAccounts: ConnectedGoogleAccount[] = [];
+  let defaultAccount: ConnectedGoogleAccount | undefined;
   try {
-    parsedSession = normalizeStoredOAuthSession(JSON.parse(rawSession), tokenPath);
+    const parsedState = normalizeStoredOAuthState(JSON.parse(rawSession), tokenPath);
+    parsedAccounts = Object.values(parsedState.accounts);
+    defaultAccount = parsedState.defaultAccountId ? parsedState.accounts[parsedState.defaultAccountId] : parsedAccounts[0];
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new CorruptStateError("oauth-session", tokenPath);
@@ -120,13 +135,27 @@ export async function inspectCliAuthState(
 
     throw error;
   }
-  auth.authenticated = true;
-  auth.sessionValid = true;
-  auth.refreshTokenPresent = Boolean(parsedSession.refreshToken);
-  auth.scope = parsedSession.scope;
-  auth.scopeMatchesConfig = hasRequiredScopes(parsedSession.scope, config.scope);
-  auth.expiresAt = new Date(parsedSession.expiresAt).toISOString();
-  auth.expiresInSeconds = Math.max(0, Math.floor((parsedSession.expiresAt - Date.now()) / 1000));
+  auth.authenticated = parsedAccounts.length > 0;
+  auth.sessionValid = parsedAccounts.length > 0;
+  auth.accountCount = parsedAccounts.length;
+  auth.defaultAccountId = defaultAccount?.accountId;
+  auth.defaultAccountEmail = defaultAccount?.accountEmail;
+  auth.refreshTokenPresent = parsedAccounts.some((account) => Boolean(account.session.refreshToken));
+  auth.scope = defaultAccount?.session.scope;
+  auth.scopeMatchesConfig = parsedAccounts.every((account) => hasRequiredScopes(account.session.scope, config.scope));
+  auth.expiresAt = defaultAccount ? new Date(defaultAccount.session.expiresAt).toISOString() : undefined;
+  auth.expiresInSeconds = defaultAccount
+    ? Math.max(0, Math.floor((defaultAccount.session.expiresAt - Date.now()) / 1000))
+    : undefined;
+  auth.accounts = parsedAccounts.map((account) => ({
+    accountId: account.accountId,
+    accountEmail: account.accountEmail,
+    accountDisplayName: account.accountDisplayName,
+    isDefault: defaultAccount?.accountId === account.accountId,
+    scope: account.session.scope,
+    expiresAt: new Date(account.session.expiresAt).toISOString(),
+    refreshTokenPresent: Boolean(account.session.refreshToken)
+  }));
 
   if (!auth.scopeMatchesConfig) {
     issues.push({
@@ -138,9 +167,9 @@ export async function inspectCliAuthState(
   }
 
   try {
-    const accessToken = await authManager.getAccessToken();
-    const currentUser = await driveClient.getCurrentUser(accessToken);
-    auth.currentUserEmail = currentUser?.emailAddress;
+    for (const account of parsedAccounts) {
+      await authManager.getAccessToken(account.accountId);
+    }
   } catch (error) {
     issues.push({
       severity: "warning",
@@ -182,6 +211,7 @@ export async function runCliDoctor(
       sessionFileExists: false,
       authenticated: false,
       sessionValid: false,
+      accountCount: 0,
       refreshTokenPresent: false,
       scopeMatchesConfig: false
     },
@@ -342,6 +372,41 @@ export async function runCliDoctor(
     }
   }
 
+  if (report.auth.accounts && report.auth.accounts.length > 0) {
+    const knownAccountIds = new Set(report.auth.accounts.map((account) => account.accountId));
+    let missingBindingCount = 0;
+    let removedBindingCount = 0;
+    const manifest = await manifestStore.readManifest();
+    for (const entry of Object.values(manifest.files)) {
+      if (!entry.accountId) {
+        missingBindingCount += 1;
+        continue;
+      }
+
+      if (!knownAccountIds.has(entry.accountId)) {
+        removedBindingCount += 1;
+      }
+    }
+
+    if (missingBindingCount > 0) {
+      issues.push({
+        severity: "warning",
+        code: "MANIFEST_MISSING_ACCOUNT_BINDINGS",
+        message: `${missingBindingCount} linked file${missingBindingCount === 1 ? "" : "s"} are missing an account binding and will bind on next successful sync.`,
+        path: manifestStore.getManifestPath()
+      });
+    }
+
+    if (removedBindingCount > 0) {
+      issues.push({
+        severity: "warning",
+        code: "MANIFEST_MISSING_CONNECTED_ACCOUNTS",
+        message: `${removedBindingCount} linked file${removedBindingCount === 1 ? "" : "s"} reference disconnected Google accounts and may need recovery on next sync.`,
+        path: manifestStore.getManifestPath()
+      });
+    }
+  }
+
   report.repair.performed = repairPerformed;
   return report;
 }
@@ -352,7 +417,7 @@ export function formatDoctorReport(report: CliDoctorReport): string {
     `Manifest: ${report.manifest.valid ? "ok" : "corrupt"}${report.manifest.exists ? ` (${report.manifest.linkedFileCount} linked)` : " (not created yet)"}`,
     `Auth: ${
       report.auth.authenticated
-        ? `signed in${report.auth.currentUserEmail ? ` as ${report.auth.currentUserEmail}` : ""}`
+        ? `signed in${report.auth.defaultAccountEmail ? ` as ${report.auth.defaultAccountEmail}` : ""}`
         : "not signed in"
     }`
   ];

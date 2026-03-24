@@ -40,8 +40,10 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onCommand:gdocSync.signIn",
-    "onCommand:gdocSync.signOut",
+    "onCommand:gdocSync.connectGoogleAccount",
+    "onCommand:gdocSync.disconnectGoogleAccount",
+    "onCommand:gdocSync.switchDefaultGoogleAccount",
+    "onCommand:gdocSync.googleAccounts",
     "onCommand:gdocSync.linkCurrentFile",
     "onCommand:gdocSync.importGoogleDoc",
     "onCommand:gdocSync.syncCurrentFile",
@@ -52,13 +54,23 @@
   "contributes": {
     "commands": [
       {
-        "command": "gdocSync.signIn",
-        "title": "GDriveSync: Sign In",
+        "command": "gdocSync.connectGoogleAccount",
+        "title": "Connect Google Account...",
         "category": "GDriveSync"
       },
       {
-        "command": "gdocSync.signOut",
-        "title": "GDriveSync: Sign Out",
+        "command": "gdocSync.disconnectGoogleAccount",
+        "title": "Disconnect Google Account...",
+        "category": "GDriveSync"
+      },
+      {
+        "command": "gdocSync.switchDefaultGoogleAccount",
+        "title": "Switch Default Google Account",
+        "category": "GDriveSync"
+      },
+      {
+        "command": "gdocSync.googleAccounts",
+        "title": "Google Accounts",
         "category": "GDriveSync"
       },
       {
@@ -135,10 +147,16 @@
       ],
       "commandPalette": [
         {
-          "command": "gdocSync.signIn"
+          "command": "gdocSync.connectGoogleAccount"
         },
         {
-          "command": "gdocSync.signOut"
+          "command": "gdocSync.disconnectGoogleAccount"
+        },
+        {
+          "command": "gdocSync.switchDefaultGoogleAccount"
+        },
+        {
+          "command": "gdocSync.googleAccounts"
         },
         {
           "command": "gdocSync.linkCurrentFile"

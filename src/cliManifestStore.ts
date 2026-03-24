@@ -8,7 +8,7 @@ import { fromManifestKey, toManifestKey } from "./utils/paths";
 const MANIFEST_FILE_NAME = ".gdrivesync.json";
 
 function defaultManifest(): SyncManifest {
-  return { version: 3, files: {} };
+  return { version: 4, files: {} };
 }
 
 function sortManifest(manifest: SyncManifest): SyncManifest {
@@ -39,9 +39,7 @@ export class CliManifestStore {
   }
 
   private matchesGeneratedOutput(entry: LinkedFileEntry, candidateKey: string): boolean {
-    return (entry.generatedFiles || entry.generatedFilePaths || []).some((generatedFile) =>
-      typeof generatedFile === "string" ? generatedFile === candidateKey : generatedFile.relativePath === candidateKey
-    );
+    return (entry.generatedFiles || []).some((generatedFile) => generatedFile.relativePath === candidateKey);
   }
 
   getManifestPath(): string {

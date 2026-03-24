@@ -32,7 +32,7 @@ export class DriveClient {
 
   async getCurrentUser(accessToken: string): Promise<DriveUserInfo | undefined> {
     const url = new URL("https://www.googleapis.com/drive/v3/about");
-    url.searchParams.set("fields", "user(displayName,emailAddress)");
+    url.searchParams.set("fields", "user(displayName,emailAddress,permissionId)");
 
     const response = await this.fetchImpl(url, {
       headers: {

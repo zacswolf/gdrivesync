@@ -20,15 +20,16 @@ export interface LinkedFileEntry {
   resourceKey?: string;
   title: string;
   syncOnOpen: boolean;
+  accountId?: string;
+  accountEmail?: string;
   generatedFiles?: GeneratedFileRecord[];
-  generatedFilePaths?: string[];
   lastSyncedAt?: string;
   lastDriveVersion?: string;
   lastLocalHash?: string;
 }
 
 export interface SyncManifest {
-  version: 3;
+  version: 4;
   files: Record<string, LinkedFileEntry>;
 }
 
@@ -48,6 +49,19 @@ export interface StoredOAuthSession {
   expiresAt: number;
   scope: string;
   tokenType: string;
+}
+
+export interface ConnectedGoogleAccount {
+  accountId: string;
+  accountEmail?: string;
+  accountDisplayName?: string;
+  session: StoredOAuthSession;
+}
+
+export interface StoredOAuthState {
+  version: 1;
+  defaultAccountId?: string;
+  accounts: Record<string, ConnectedGoogleAccount>;
 }
 
 export interface OAuthStatePayload {
@@ -82,6 +96,9 @@ export interface PickerSelection {
   sourceUrl: string;
   sourceMimeType: string;
   resourceKey?: string;
+  accountId?: string;
+  accountEmail?: string;
+  accountDisplayName?: string;
 }
 
 export interface DriveFileMetadata {
@@ -97,6 +114,7 @@ export interface DriveFileMetadata {
 export interface DriveUserInfo {
   displayName?: string;
   emailAddress?: string;
+  permissionId?: string;
 }
 
 export interface ParsedDocInput {
@@ -115,15 +133,21 @@ export interface LinkedFileContext {
   entry: LinkedFileEntry;
 }
 
-export interface TokenStore {
-  get(): Promise<StoredOAuthSession | undefined>;
-  set(session: StoredOAuthSession): Promise<void>;
-  delete(): Promise<void>;
+export interface OAuthStateStore {
+  load(): Promise<StoredOAuthState | undefined>;
+  save(state: StoredOAuthState): Promise<void>;
+  clear(): Promise<void>;
 }
 
 export interface SyncOutcome {
   status: "synced" | "skipped" | "cancelled";
   message: string;
+  rebind?: {
+    previousAccountId?: string;
+    previousAccountEmail?: string;
+    nextAccountId: string;
+    nextAccountEmail?: string;
+  };
   transition?: {
     kind: "spreadsheet-output-kind-changed";
     previousOutputKind: SyncOutputKind;

@@ -43,12 +43,13 @@
         <h1>Privacy Policy</h1>
         <p>
           GDriveSync for VS Code uses Google account access only to read supported Google Drive files that you
-          explicitly connect to the extension.
+          explicitly connect to the extension. The extension can store multiple connected Google accounts locally, but
+          it remains one-way and read-only with respect to Google Drive content.
         </p>
 
         <h2>What data is accessed</h2>
         <ul>
-          <li>Google account authorization tokens for the connected user</li>
+          <li>Google account authorization tokens for the connected Google account or accounts</li>
           <li>Google Drive metadata for the supported Google files the user links</li>
           <li>Markdown, presentation, or spreadsheet export data, or downloaded file contents for the linked Google files</li>
         </ul>
@@ -56,7 +57,7 @@
         <h2>Where data is stored</h2>
         <ul>
           <li>OAuth tokens are stored locally in VS Code secret storage</li>
-          <li>Linked file metadata is stored locally in a workspace `.gdrivesync.json` file</li>
+          <li>Linked file metadata, including bound-account metadata, is stored locally in a workspace `.gdrivesync.json` file</li>
           <li>No server-side database is used in v1</li>
         </ul>
 

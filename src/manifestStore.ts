@@ -8,7 +8,7 @@ import { LinkedFileContext, LinkedFileEntry, SyncManifest } from "./types";
 import { fromManifestKey, toManifestKey } from "./utils/paths";
 
 const MANIFEST_FILE_NAME = ".gdrivesync.json";
-const defaultManifest = (): SyncManifest => ({ version: 3, files: {} });
+const defaultManifest = (): SyncManifest => ({ version: 4, files: {} });
 
 function sortManifest(manifest: SyncManifest): SyncManifest {
   return {
@@ -37,9 +37,7 @@ export class ManifestStore {
   }
 
   private matchesGeneratedOutput(entry: LinkedFileEntry, candidateKey: string): boolean {
-    return (entry.generatedFiles || entry.generatedFilePaths || []).some((generatedFile) =>
-      typeof generatedFile === "string" ? generatedFile === candidateKey : generatedFile.relativePath === candidateKey
-    );
+    return (entry.generatedFiles || []).some((generatedFile) => generatedFile.relativePath === candidateKey);
   }
 
   getManifestPath(folderPath: string): string {

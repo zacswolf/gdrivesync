@@ -7,6 +7,8 @@ GDriveSync is most useful to agents when it is treated like a stateful bridge be
 - Use `gdrivesync inspect ... --json` before deciding whether a file should become Markdown, Marp Markdown, or CSV.
 - Use `gdrivesync export ...` when the agent only needs a transient local read.
 - Use `gdrivesync link ...` when the agent wants durable workspace state that can be refreshed later.
+- Use `gdrivesync auth list --json` and `gdrivesync auth use <account> --json` when the agent needs explicit account control.
+- Use `--account <email-or-id>` on `inspect`, `export`, `link`, or `sync` when deterministic account selection matters more than the default probing behavior.
 - Use `gdrivesync status --all --json --cwd <workspace>` to discover linked files before a batch run.
 - Use `gdrivesync sync --all --json --cwd <workspace>` for batch refreshes.
 - Use `gdrivesync doctor --json --cwd <workspace>` before large automated runs if the agent needs to validate auth and manifest health.
@@ -42,10 +44,22 @@ Create a persistent local link:
 gdrivesync link "https://docs.google.com/document/d/<file-id>/edit" "./notes/spec.md" --cwd "./workspace" --json
 ```
 
+Choose the default connected Google account:
+
+```bash
+gdrivesync auth use "me@example.com" --json
+```
+
 Refresh all linked files in a workspace:
 
 ```bash
 gdrivesync sync --all --cwd "./workspace" --json
+```
+
+Force one specific connected account for a single operation:
+
+```bash
+gdrivesync export "https://docs.google.com/document/d/<file-id>/edit" --account "work@example.com" --json
 ```
 
 Validate workspace and auth health:
@@ -72,5 +86,6 @@ gdrivesync export "https://docs.google.com/presentation/d/<file-id>/edit" "./dec
 - Expect Marp-flavored Markdown outputs for Google Slides and PowerPoint.
 - Expect CSV or folder-of-CSV outputs for Sheets and XLSX.
 - Treat Google Drive as the source of truth. This project is one-way by design.
+- Expect linked files to stay pinned to their bound Google account unless that account becomes unusable, in which case GDriveSync may recover via another connected account and report the rebind.
 - If an agent wants to preserve local edits, it should inspect sync results and respect cancelled outcomes unless it intentionally reruns with `--force`.
 - If the CLI reports `MANIFEST_CORRUPT` or `AUTH_SESSION_CORRUPT`, the supported recovery path is `gdrivesync doctor --repair`.

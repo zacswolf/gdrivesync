@@ -14,16 +14,18 @@ import { loadDevelopmentEnv, resolveCliGoogleConfig } from "./runtimeConfig";
 import { SlidesClient } from "./slidesClient";
 import { CorruptStateError } from "./stateErrors";
 import { resolveSyncProfileForMimeType } from "./syncProfiles";
-import { FileTokenStore } from "./tokenStores";
+import { FileOAuthStateStore } from "./tokenStores";
 import { buildCliSyncAllSummary } from "./utils/cliSyncSummary";
 import { parseGoogleDocInput } from "./utils/docUrl";
 import { fromManifestKey } from "./utils/paths";
+import { ConnectedGoogleAccount } from "./types";
 
 const CLI_JSON_CONTRACT_VERSION = 1;
 
 interface CliFlags {
   json: boolean;
   all: boolean;
+  account?: string;
   force: boolean;
   removeGenerated: boolean;
   includeBackgrounds: boolean;
@@ -41,7 +43,10 @@ interface ParsedCliInput {
 function printUsage(): void {
   process.stdout.write(`Usage:
   gdrivesync auth login
-  gdrivesync auth logout
+  gdrivesync auth logout --account <account>
+  gdrivesync auth logout --all
+  gdrivesync auth list [--json]
+  gdrivesync auth use <account> [--json]
   gdrivesync auth status [--json]
   gdrivesync doctor [--cwd path] [--json] [--repair]
   gdrivesync inspect <google-file-url-or-id> [--json]
@@ -58,6 +63,7 @@ Flags:
   --json              Emit machine-readable JSON
   --cwd <path>        Workspace root to use for manifest operations
   --all               Target every linked file in the manifest
+  --account <value>   Google account email or account ID to target
   --force             Overwrite local changes during sync
   --remove-generated   Remove tracked generated files when unlinking
   --include-backgrounds  For oversized Google Slides decks that fall back to the Slides API, include slide background images
@@ -103,6 +109,15 @@ function parseCliInput(rawArgs: string[]): ParsedCliInput {
     }
     if (arg === "--all") {
       flags.all = true;
+      continue;
+    }
+    if (arg === "--account") {
+      const value = rawArgs[index + 1];
+      if (!value) {
+        throw new Error("--account requires an email or account ID.");
+      }
+      flags.account = value;
+      index += 1;
       continue;
     }
     if (arg === "--force" || arg === "--yes") {
@@ -216,7 +231,7 @@ function buildCliErrorPayload(error: unknown): {
   }
 
   const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("You need to sign in to Google")) {
+  if (message.includes("You need to sign in to Google") || message.includes("connect a Google account before syncing")) {
     return {
       code: "AUTH_REQUIRED",
       message,
@@ -299,7 +314,7 @@ async function describeLinkedFile(manifestStore: CliManifestStore, filePath: str
   }
 
   const primaryPath = fromManifestKey(linkedFile.folderPath, linkedFile.key);
-  const generatedFiles = linkedFile.entry.generatedFiles || linkedFile.entry.generatedFilePaths || [];
+  const generatedFiles = linkedFile.entry.generatedFiles || [];
 
   return {
     linked: true,
@@ -316,11 +331,22 @@ async function describeLinkedFile(manifestStore: CliManifestStore, filePath: str
       sourceMimeType: linkedFile.entry.sourceMimeType,
       localFormat: linkedFile.entry.localFormat,
       outputKind: linkedFile.entry.outputKind,
+      accountId: linkedFile.entry.accountId,
+      accountEmail: linkedFile.entry.accountEmail,
       syncOnOpen: linkedFile.entry.syncOnOpen,
       lastSyncedAt: linkedFile.entry.lastSyncedAt,
       lastDriveVersion: linkedFile.entry.lastDriveVersion,
       generatedFileCount: generatedFiles.length
     }
+  };
+}
+
+function serializeAccount(account: ConnectedGoogleAccount, defaultAccountId?: string) {
+  return {
+    accountId: account.accountId,
+    accountEmail: account.accountEmail,
+    accountDisplayName: account.accountDisplayName,
+    isDefault: defaultAccountId === account.accountId
   };
 }
 
@@ -334,7 +360,7 @@ async function main(): Promise<void> {
   }
 
   const tokenPath = path.join(os.homedir(), ".gdrivesync-dev-session.json");
-  const tokenStore = new FileTokenStore(tokenPath);
+  const tokenStore = new FileOAuthStateStore(tokenPath);
   const authManager = new GoogleAuthManager(tokenStore, resolveCliGoogleConfig, openExternalUrl);
   const driveClient = new DriveClient();
   const slidesClient = new SlidesClient();
@@ -344,40 +370,113 @@ async function main(): Promise<void> {
 
   if (parsed.command === "auth") {
     if (parsed.subcommand === "login") {
-      await authManager.signIn();
+      const connectedAccount = await authManager.connectAccount();
       const authState = await inspectCliAuthState(tokenPath, authManager, driveClient).catch(() => undefined);
       if (parsed.flags.json) {
-        printJsonSuccess(parsed, authState?.auth || { authenticated: true });
+        printJsonSuccess(parsed, {
+          connectedAccount: serializeAccount(connectedAccount, connectedAccount.accountId),
+          auth: authState?.auth || { authenticated: true }
+        });
       } else {
         printText(
-          authState?.auth.currentUserEmail
-            ? `Signed in as ${authState.auth.currentUserEmail}.`
-            : "Signed in."
+          connectedAccount.accountEmail
+            ? `Connected ${connectedAccount.accountEmail}.`
+            : `Connected ${connectedAccount.accountId}.`
         );
       }
       return;
     }
     if (parsed.subcommand === "logout") {
-      await authManager.signOut();
+      if (parsed.flags.all) {
+        const disconnectedCount = await authManager.disconnectAll();
+        if (parsed.flags.json) {
+          printJsonSuccess(parsed, { disconnectedCount });
+        } else {
+          printText(
+            disconnectedCount === 1 ? "Disconnected 1 Google account." : `Disconnected ${disconnectedCount} Google accounts.`
+          );
+        }
+        return;
+      }
+
+      if (!parsed.flags.account) {
+        throw new Error("auth logout requires --account <email-or-id> or --all.");
+      }
+
+      const disconnectedAccount = await authManager.disconnectAccount(parsed.flags.account);
       if (parsed.flags.json) {
-        printJsonSuccess(parsed, { authenticated: false, tokenPath });
+        printJsonSuccess(parsed, {
+          disconnected: Boolean(disconnectedAccount),
+          account: disconnectedAccount ? serializeAccount(disconnectedAccount) : undefined
+        });
       } else {
-        printText("Signed out.");
+        printText(
+          disconnectedAccount
+            ? `Disconnected ${disconnectedAccount.accountEmail || disconnectedAccount.accountId}.`
+            : `No connected Google account matched ${parsed.flags.account}.`
+        );
+      }
+      return;
+    }
+    if (parsed.subcommand === "list") {
+      const accounts = await authManager.listAccounts();
+      const defaultAccount = await authManager.getDefaultAccount();
+      const payload = {
+        count: accounts.length,
+        defaultAccountId: defaultAccount?.accountId,
+        accounts: accounts.map((account) => serializeAccount(account, defaultAccount?.accountId))
+      };
+      if (parsed.flags.json) {
+        printJsonSuccess(parsed, payload);
+      } else if (accounts.length === 0) {
+        printText("No Google accounts connected.");
+      } else {
+        for (const account of payload.accounts) {
+          printText(`${account.accountEmail || account.accountId}${account.isDefault ? " (default)" : ""}`);
+        }
+      }
+      return;
+    }
+    if (parsed.subcommand === "use") {
+      const accountRef = parsed.args[0];
+      if (!accountRef) {
+        throw new Error("auth use requires an email or account ID.");
+      }
+
+      const defaultAccount = await authManager.setDefaultAccount(accountRef);
+      if (parsed.flags.json) {
+        printJsonSuccess(parsed, {
+          defaultAccount: serializeAccount(defaultAccount, defaultAccount.accountId)
+        });
+      } else {
+        printText(`Default Google account is now ${defaultAccount.accountEmail || defaultAccount.accountId}.`);
       }
       return;
     }
     if (parsed.subcommand === "status") {
-      const payload = (await inspectCliAuthState(tokenPath, authManager, driveClient)).auth;
+      const authInspection = await inspectCliAuthState(tokenPath, authManager, driveClient);
+      const accounts = await authManager.listAccounts();
+      const defaultAccount = await authManager.getDefaultAccount();
+      const payload = {
+        ...authInspection.auth,
+        connectedAccountCount: accounts.length,
+        defaultAccountId: defaultAccount?.accountId,
+        accounts: accounts.map((account) => serializeAccount(account, defaultAccount?.accountId))
+      };
       if (parsed.flags.json) {
         printJsonSuccess(parsed, payload);
       } else {
         if (!payload.authenticated) {
-          printText("Not signed in.");
+          printText("No Google accounts connected.");
         } else {
           const parts = [
-            payload.currentUserEmail ? `Signed in as ${payload.currentUserEmail}` : "Signed in",
-            payload.scope ? `scope: ${payload.scope}` : undefined,
-            payload.expiresInSeconds !== undefined ? `expires in ${payload.expiresInSeconds}s` : undefined
+            payload.connectedAccountCount === 1 ? "1 connected account" : `${payload.connectedAccountCount} connected accounts`,
+            defaultAccount?.accountEmail
+              ? `default: ${defaultAccount.accountEmail}`
+              : defaultAccount
+                ? `default: ${defaultAccount.accountId}`
+                : undefined,
+            payload.scope ? `scope: ${payload.scope}` : undefined
           ].filter(Boolean);
           printText(parts.join(" • "));
         }
@@ -385,7 +484,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    throw new Error("Use one of: auth login, auth logout, auth status");
+    throw new Error("Use one of: auth login, auth logout, auth list, auth use, auth status");
   }
 
   if (parsed.command === "doctor") {
@@ -403,18 +502,6 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (parsed.command === "sign-in") {
-    await authManager.signIn();
-    printText("Signed in.");
-    return;
-  }
-
-  if (parsed.command === "sign-out") {
-    await authManager.signOut();
-    printText("Signed out.");
-    return;
-  }
-
   if (parsed.command === "inspect" || parsed.command === "metadata") {
     const rawInput = parsed.args[0];
     const parsedInput = rawInput ? parseGoogleDocInput(rawInput) : undefined;
@@ -422,7 +509,7 @@ async function main(): Promise<void> {
       throw new Error("Pass a Google Docs, Slides, Sheets, Drive, DOCX, PPTX, or XLSX file URL or raw file ID.");
     }
 
-    const accessToken = await authManager.getAccessToken();
+    const { accessToken } = await authManager.getAccessToken(parsed.flags.account);
     const metadata = await driveClient.getFileMetadata(accessToken, {
       fileId: parsedInput.fileId,
       resourceKey: parsedInput.resourceKey,
@@ -431,13 +518,17 @@ async function main(): Promise<void> {
     });
     const syncProfile = resolveSyncProfileForMimeType(metadata.mimeType);
     if (parsed.command === "metadata") {
-      printJsonSuccess(parsed, metadata);
+      printJsonSuccess(parsed, {
+        ...metadata,
+        account: parsed.flags.account || undefined
+      });
       return;
     }
 
     printJsonSuccess(parsed, {
       fileId: metadata.id,
       title: metadata.name,
+      account: parsed.flags.account || undefined,
       sourceMimeType: metadata.mimeType,
       sourceUrl: metadata.webViewLink || syncProfile?.buildSourceUrl(metadata.id) || parsedInput.sourceUrl,
       profileId: syncProfile?.id,
@@ -460,7 +551,7 @@ async function main(): Promise<void> {
       throw new Error("Pass a Google Docs, Slides, Sheets, Drive, DOCX, PPTX, or XLSX file URL or raw file ID.");
     }
 
-    const accessToken = await authManager.getAccessToken();
+    const { accessToken } = await authManager.getAccessToken(parsed.flags.account);
     const metadata = await driveClient.getFileMetadata(accessToken, {
       fileId: parsedInput.fileId,
       resourceKey: parsedInput.resourceKey,
@@ -490,7 +581,8 @@ async function main(): Promise<void> {
         title: metadata.name,
         sourceUrl: metadata.webViewLink || syncProfile.buildSourceUrl(metadata.id),
         sourceMimeType: metadata.mimeType,
-        resourceKey: metadata.resourceKey || parsedInput.resourceKey
+        resourceKey: metadata.resourceKey || parsedInput.resourceKey,
+        accountId: parsed.flags.account
       },
       {
         targetPath: resolvedOutputPath,
@@ -534,8 +626,11 @@ async function main(): Promise<void> {
     }
 
     const localPath = resolveLocalPath(workspaceRoot, localPathArg);
-    const selection = await syncManager.resolveSelectionFromInput(rawInput, localPath);
-    const outcome = await syncManager.linkFile(localPath, selection, { force: parsed.flags.force });
+    const selection = await syncManager.resolveSelectionFromInput(rawInput, localPath, parsed.flags.account);
+    const outcome = await syncManager.linkFile(localPath, selection, {
+      force: parsed.flags.force,
+      accountId: parsed.flags.account
+    });
     if (parsed.flags.json) {
       printJsonSuccess(parsed, {
         targetPath: localPath,
@@ -588,7 +683,7 @@ async function main(): Promise<void> {
 
   if (parsed.command === "sync") {
     if (parsed.flags.all) {
-      const summary = await syncManager.syncAll({ force: parsed.flags.force });
+      const summary = await syncManager.syncAll({ force: parsed.flags.force, accountId: parsed.flags.account });
       if (parsed.flags.json) {
         printJsonSuccess(parsed, {
           rootPath: workspaceRoot,
@@ -609,7 +704,7 @@ async function main(): Promise<void> {
       throw new Error("sync requires a local path or --all.");
     }
     const localPath = resolveLocalPath(workspaceRoot, localPathArg);
-    const outcome = await syncManager.syncFile(localPath, { force: parsed.flags.force });
+    const outcome = await syncManager.syncFile(localPath, { force: parsed.flags.force, accountId: parsed.flags.account });
     if (parsed.flags.json) {
       printJsonSuccess(parsed, {
         targetPath: localPath,
