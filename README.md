@@ -37,6 +37,7 @@ Agent-friendly qualities:
 - Google Drive export to `text/markdown`
 - DOCX-in-Drive download and local DOCX -> Markdown conversion
 - Google Slides export to `.pptx` and local Marp Markdown generation
+- Automatic Google Slides API fallback for oversized native Slides decks when Drive export is too large
 - Drive-hosted `.pptx` download and local Marp Markdown generation
 - Google Sheets export to `.xlsx` and local `.csv` generation
 - Drive-hosted `.xlsx` download and local `.csv` generation
@@ -248,5 +249,6 @@ Publishing a short best-practices doc for agent usage is not dumb at all. It is 
 - The hosted Picker fallback is still used as a backup if direct pasted-link access fails
 - Formatting fidelity depends on Google’s Markdown export for native Docs, local DOCX conversion for Word files, local presentation parsing for Slides/PPTX, and local workbook parsing for Sheets/XLSX
 - Presentation sync targets Marp-flavored Markdown and focuses on slide text plus extracted images rather than full visual layout fidelity
+- Very large native Google Slides decks may bypass Drive export and use the Google Slides API fallback automatically
 - Spreadsheet sync only supports native Google Sheets and `.xlsx` in v1
 - Linked files must live inside an open VS Code workspace folder

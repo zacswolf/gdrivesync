@@ -16,6 +16,7 @@ import {
 import { SyncManager } from "./syncManager";
 import { SecretStorageTokenStore } from "./tokenStores";
 import { ParsedDocInput, PickerSelection, SyncOutcome } from "./types";
+import { SlidesClient } from "./slidesClient";
 import { parseGoogleDocInput, extractGoogleResourceKey } from "./utils/docUrl";
 import { normalizeResolvedGoogleFileSelection, shouldRecoverAccessWithPicker } from "./utils/googleFileSelection";
 import { fromManifestKey, slugifyForFileName } from "./utils/paths";
@@ -115,7 +116,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const driveClient = new DriveClient();
   const pickerClient = new PickerClient(resolveExtensionGoogleConfig);
-  const syncManager = new SyncManager(authManager, driveClient, manifestStore);
+  const syncManager = new SyncManager(authManager, driveClient, manifestStore, new SlidesClient());
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const codeLensEmitter = new vscode.EventEmitter<void>();
 

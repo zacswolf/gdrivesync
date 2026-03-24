@@ -11,7 +11,8 @@ export class GoogleApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
-    readonly details?: string
+    readonly details?: string,
+    readonly reason?: string
   ) {
     super(message);
   }
@@ -143,7 +144,8 @@ export class DriveClient {
       throw new GoogleApiError(
         parsedDetails.message || "This Google Workspace file is too large to export.",
         response.status,
-        details
+        details,
+        parsedDetails.reason
       );
     }
 
@@ -153,14 +155,16 @@ export class DriveClient {
           ? `${parsedDetails.message} (file ${fileId})`
           : `The current Google session cannot access Google file ${fileId}. Share it with this account or sign in with a Google account that can read it.`,
         response.status,
-        details
+        details,
+        parsedDetails.reason
       );
     }
 
     throw new GoogleApiError(
       parsedDetails.message || `Google Drive request failed with status ${response.status}.`,
       response.status,
-      details
+      details,
+      parsedDetails.reason
     );
   }
 }

@@ -4,11 +4,13 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import { convertDocxToMarkdown } from "./docxConverter";
-import { DriveClient, PickerGrantRequiredError } from "./driveClient";
+import { DriveClient, GoogleApiError, PickerGrantRequiredError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
 import { convertPresentationToMarp } from "./presentationConverter";
+import { convertSlidesApiPresentationToMarp } from "./slidesApiPresentationConverter";
+import { SlidesClient } from "./slidesClient";
 import { getSyncProfile, SyncProfile } from "./syncProfiles";
 import {
   GeneratedFilePayload,
@@ -36,7 +38,8 @@ export class SyncManager {
   constructor(
     private readonly authManager: GoogleAuthManager,
     private readonly driveClient: DriveClient,
-    private readonly manifestStore: ManifestStore
+    private readonly manifestStore: ManifestStore,
+    private readonly slidesClient: SlidesClient
   ) {}
 
   async linkFile(fileUri: vscode.Uri, selection: PickerSelection): Promise<SyncOutcome> {
@@ -460,15 +463,42 @@ export class SyncManager {
     title: string
   ) {
     if (profile.localFormat === "marp") {
-      const presentationBytes = await this.fetchPresentationBytes(accessToken, fileId, resourceKey, profile);
-      return convertPresentationToMarp(markdownFilePath, presentationBytes, {
-        assetMode: "external",
-        title
-      });
+      return this.preparePresentationOutput(markdownFilePath, accessToken, fileId, resourceKey, profile, title);
     }
 
     const sourceText = await this.fetchSourceMarkdown(accessToken, fileId, resourceKey, profile);
     return extractMarkdownAssets(markdownFilePath, sourceText);
+  }
+
+  private async preparePresentationOutput(
+    markdownFilePath: string,
+    accessToken: string,
+    fileId: string,
+    resourceKey: string | undefined,
+    profile: ReturnType<typeof getSyncProfile>,
+    title: string
+  ) {
+    try {
+      const presentationBytes = await this.fetchPresentationBytes(accessToken, fileId, resourceKey, profile);
+      return await convertPresentationToMarp(markdownFilePath, presentationBytes, {
+        assetMode: "external",
+        title
+      });
+    } catch (error) {
+      if (profile.id === "google-slide-marp" && error instanceof GoogleApiError && error.reason === "exportSizeLimitExceeded") {
+        const presentation = await this.slidesClient.getPresentation(accessToken, fileId);
+        return convertSlidesApiPresentationToMarp(
+          markdownFilePath,
+          presentation,
+          {
+            assetMode: "external",
+            title
+          }
+        );
+      }
+
+      throw error;
+    }
   }
 
   private async fetchPresentationBytes(

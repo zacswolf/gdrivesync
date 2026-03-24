@@ -10,6 +10,7 @@ import { CliSyncManager } from "./cliSync";
 import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { loadDevelopmentEnv, resolveCliGoogleConfig } from "./runtimeConfig";
+import { SlidesClient } from "./slidesClient";
 import { resolveSyncProfileForMimeType } from "./syncProfiles";
 import { FileTokenStore } from "./tokenStores";
 import { buildCliSyncAllSummary } from "./utils/cliSyncSummary";
@@ -215,9 +216,10 @@ async function main(): Promise<void> {
   const tokenStore = new FileTokenStore(path.join(os.homedir(), ".gdrivesync-dev-session.json"));
   const authManager = new GoogleAuthManager(tokenStore, resolveCliGoogleConfig, openExternalUrl);
   const driveClient = new DriveClient();
+  const slidesClient = new SlidesClient();
   const workspaceRoot = resolveWorkspaceRoot(parsed.flags.cwd);
   const manifestStore = new CliManifestStore(workspaceRoot);
-  const syncManager = new CliSyncManager(authManager, driveClient, manifestStore);
+  const syncManager = new CliSyncManager(authManager, driveClient, manifestStore, slidesClient);
 
   if (parsed.command === "auth") {
     if (parsed.subcommand === "login") {

@@ -3,10 +3,12 @@ import path from "node:path";
 
 import { CliManifestStore } from "./cliManifestStore";
 import { convertDocxToMarkdown } from "./docxConverter";
-import { DriveClient } from "./driveClient";
+import { DriveClient, GoogleApiError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
 import { convertPresentationToMarp } from "./presentationConverter";
+import { convertSlidesApiPresentationToMarp } from "./slidesApiPresentationConverter";
+import { SlidesClient } from "./slidesClient";
 import { getSyncProfile, getSyncProfilesForTargetFamily, resolveSyncProfileForMimeType } from "./syncProfiles";
 import {
   GeneratedFilePayload,
@@ -61,7 +63,8 @@ export class CliSyncManager {
   constructor(
     private readonly authManager: GoogleAuthManager,
     private readonly driveClient: DriveClient,
-    private readonly manifestStore: CliManifestStore
+    private readonly manifestStore: CliManifestStore,
+    private readonly slidesClient: SlidesClient
   ) {}
 
   getAllowedProfilesForTargetPath(targetPath: string) {
@@ -252,13 +255,14 @@ export class CliSyncManager {
       `${this.slugifyTitle(metadata.name || selection.title || (profile.localFormat === "marp" ? "presentation" : "document"))}.md`;
     const markdownResult =
       profile.localFormat === "marp"
-        ? await convertPresentationToMarp(
+        ? await this.preparePresentationOutput(
             exportMarkdownPath,
-            await this.fetchPresentationBytes(accessToken, selection.fileId, selection.resourceKey, profile),
-            {
-              assetMode: options?.targetPath ? "external" : "data-uri",
-              title: metadata.name || selection.title
-            }
+            accessToken,
+            selection.fileId,
+            selection.resourceKey,
+            profile,
+            metadata.name || selection.title,
+            options?.targetPath ? "external" : "data-uri"
           )
         : extractMarkdownAssets(
             exportMarkdownPath,
@@ -484,15 +488,43 @@ export class CliSyncManager {
     title: string
   ) {
     if (profile.localFormat === "marp") {
-      const presentationBytes = await this.fetchPresentationBytes(accessToken, fileId, resourceKey, profile);
-      return convertPresentationToMarp(markdownFilePath, presentationBytes, {
-        assetMode: "external",
-        title
-      });
+      return this.preparePresentationOutput(markdownFilePath, accessToken, fileId, resourceKey, profile, title, "external");
     }
 
     const sourceText = await this.fetchSourceMarkdown(accessToken, fileId, resourceKey, profile);
     return extractMarkdownAssets(markdownFilePath, sourceText);
+  }
+
+  private async preparePresentationOutput(
+    markdownFilePath: string,
+    accessToken: string,
+    fileId: string,
+    resourceKey: string | undefined,
+    profile: ReturnType<typeof getSyncProfile>,
+    title: string,
+    assetMode: "external" | "data-uri"
+  ) {
+    try {
+      const presentationBytes = await this.fetchPresentationBytes(accessToken, fileId, resourceKey, profile);
+      return await convertPresentationToMarp(markdownFilePath, presentationBytes, {
+        assetMode,
+        title
+      });
+    } catch (error) {
+      if (profile.id === "google-slide-marp" && error instanceof GoogleApiError && error.reason === "exportSizeLimitExceeded") {
+        const presentation = await this.slidesClient.getPresentation(accessToken, fileId);
+        return convertSlidesApiPresentationToMarp(
+          markdownFilePath,
+          presentation,
+          {
+            assetMode,
+            title
+          }
+        );
+      }
+
+      throw error;
+    }
   }
 
   private async fetchPresentationBytes(
