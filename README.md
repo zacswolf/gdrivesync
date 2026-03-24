@@ -35,7 +35,7 @@ Agent-friendly qualities:
 - Desktop VS Code extension scaffold in TypeScript
 - Google OAuth desktop flow with PKCE and VS Code `SecretStorage`
 - Desktop OAuth uses a localhost loopback callback inside the extension
-- Google Drive export to `text/markdown`
+- Google Docs export to `.docx` and local DOCX -> Markdown conversion for higher-resolution images
 - DOCX-in-Drive download and local DOCX -> Markdown conversion
 - Google Slides export to `.pptx` and local Marp Markdown generation
 - Automatic Google Slides API fallback for oversized native Slides decks when Drive export is too large
@@ -358,7 +358,7 @@ Publishing a short best-practices doc for agent usage is not dumb at all. It is 
 - One-way sync only: Google files -> local Markdown, Marp Markdown, or CSV
 - The extension now uses `drive.readonly` for one-way sync, so existing local sessions may need a one-time reconnect after upgrades
 - The hosted Picker fallback is still used as a backup if direct pasted-link access fails
-- Formatting fidelity depends on Google’s Markdown export for native Docs, local DOCX conversion for Word files, local presentation parsing for Slides/PPTX, and local workbook parsing for Sheets/XLSX
+- Formatting fidelity depends on local DOCX conversion for native Docs and Word files, local presentation parsing for Slides/PPTX, and local workbook parsing for Sheets/XLSX
 - Presentation sync targets Marp-flavored Markdown and focuses on slide text plus extracted images rather than full visual layout fidelity
 - Very large native Google Slides decks may bypass Drive export and use the Google Slides API fallback automatically
 - Spreadsheet sync only supports native Google Sheets and `.xlsx` in v1

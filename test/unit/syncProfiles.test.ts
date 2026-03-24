@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getSupportedSourceMimeTypes, resolveSyncProfileForMimeType } from "../../src/syncProfiles";
+import { getSupportedSourceMimeTypes, getSyncProfile, resolveSyncProfileForMimeType } from "../../src/syncProfiles";
 
 describe("syncProfiles", () => {
   it("lists the supported Google source mime types", () => {
@@ -16,6 +16,12 @@ describe("syncProfiles", () => {
 
   it("resolves the Google Docs profile from mime type", () => {
     expect(resolveSyncProfileForMimeType("application/vnd.google-apps.document")?.id).toBe("google-doc-markdown");
+  });
+
+  it("uses a DOCX export path for native Google Docs", () => {
+    const profile = getSyncProfile("google-doc-markdown");
+    expect(profile.exportMimeType).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    expect(profile.retrievalMode).toBe("drive-export-docx");
   });
 
   it("resolves the DOCX profile from mime type", () => {

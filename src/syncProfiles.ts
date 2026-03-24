@@ -2,7 +2,7 @@ import { SyncProfileId } from "./types";
 import { buildGoogleDocUrl, buildGoogleDriveFileUrl, buildGoogleSheetUrl, buildGoogleSlidesUrl } from "./utils/docUrl";
 
 export type SyncRetrievalMode =
-  | "drive-export-markdown"
+  | "drive-export-docx"
   | "drive-download-docx"
   | "drive-export-pptx"
   | "drive-download-pptx"
@@ -30,12 +30,12 @@ export const GOOGLE_DOC_MARKDOWN_PROFILE: SyncProfile = {
   sourceTypeLabel: "Google document",
   sourceMimeType: "application/vnd.google-apps.document",
   targetFamily: "markdown",
-  exportMimeType: "text/markdown",
+  exportMimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   localFormat: "markdown",
   targetFileExtension: "md",
   pickerViewId: "DOCUMENTS",
   pickerMimeTypes: "application/vnd.google-apps.document,application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  retrievalMode: "drive-export-markdown",
+  retrievalMode: "drive-export-docx",
   buildSourceUrl: buildGoogleDocUrl
 };
 

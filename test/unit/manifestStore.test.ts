@@ -13,7 +13,7 @@ describe("normalizeManifest", () => {
           fileId: "abc123",
           sourceUrl: "https://docs.google.com/document/d/abc123/edit",
           sourceMimeType: "application/vnd.google-apps.document",
-          exportMimeType: "text/markdown",
+          exportMimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           localFormat: "markdown",
           outputKind: "file",
           title: "Spec",
@@ -33,7 +33,9 @@ describe("normalizeManifest", () => {
     expect(manifest.files["docs/spec.md"]?.profileId).toBe("google-doc-markdown");
     expect(manifest.files["docs/spec.md"]?.fileId).toBe("abc123");
     expect(manifest.files["docs/spec.md"]?.sourceMimeType).toBe("application/vnd.google-apps.document");
-    expect(manifest.files["docs/spec.md"]?.exportMimeType).toBe("text/markdown");
+    expect(manifest.files["docs/spec.md"]?.exportMimeType).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
     expect(manifest.files["docs/spec.md"]?.localFormat).toBe("markdown");
     expect(manifest.files["docs/spec.md"]?.outputKind).toBe("file");
     expect(manifest.files["docs/spec.md"]?.syncOnOpen).toBe(true);
@@ -54,7 +56,7 @@ describe("normalizeManifest", () => {
           fileId: "abc123",
           sourceUrl: "https://docs.google.com/document/d/abc123/edit",
           sourceMimeType: "application/vnd.google-apps.document",
-          exportMimeType: "text/markdown",
+          exportMimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           localFormat: "markdown",
           outputKind: "file",
           title: "Spec",
@@ -79,7 +81,7 @@ describe("normalizeManifest", () => {
           fileId: "abc123",
           sourceUrl: "https://docs.google.com/document/d/abc123/edit",
           sourceMimeType: "application/vnd.google-apps.document",
-          exportMimeType: "text/markdown",
+          exportMimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
           localFormat: "markdown",
           outputKind: "file",
           title: "Spec",

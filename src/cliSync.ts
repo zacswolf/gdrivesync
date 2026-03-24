@@ -485,9 +485,20 @@ export class CliSyncManager {
     resourceKey: string | undefined,
     profile: ReturnType<typeof getSyncProfile>
   ): Promise<string> {
-    if (profile.retrievalMode === "drive-download-docx") {
-      const docxBytes = await this.driveClient.downloadFile(accessToken, fileId, resourceKey);
-      return convertDocxToMarkdown(docxBytes);
+    if (profile.retrievalMode === "drive-download-docx" || profile.retrievalMode === "drive-export-docx") {
+      try {
+        const docxBytes =
+          profile.retrievalMode === "drive-export-docx"
+            ? await this.driveClient.exportFile(accessToken, fileId, profile.exportMimeType, resourceKey)
+            : await this.driveClient.downloadFile(accessToken, fileId, resourceKey);
+        return convertDocxToMarkdown(docxBytes);
+      } catch (error) {
+        if (profile.retrievalMode === "drive-export-docx" && error instanceof GoogleApiError && error.reason === "exportSizeLimitExceeded") {
+          return this.driveClient.exportText(accessToken, fileId, "text/markdown", resourceKey);
+        }
+
+        throw error;
+      }
     }
 
     return this.driveClient.exportText(accessToken, fileId, profile.exportMimeType, resourceKey);

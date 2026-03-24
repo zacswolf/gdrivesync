@@ -83,6 +83,7 @@ gdrivesync export "https://docs.google.com/presentation/d/<file-id>/edit" "./dec
 ## Practical guidance
 
 - Expect Markdown outputs for Docs and DOCX.
+- Native Google Docs use a DOCX export path under the hood so extracted images stay much more usable than Google’s native Markdown export.
 - Expect Marp-flavored Markdown outputs for Google Slides and PowerPoint.
 - Expect CSV or folder-of-CSV outputs for Sheets and XLSX.
 - Treat Google Drive as the source of truth. This project is one-way by design.

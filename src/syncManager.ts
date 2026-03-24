@@ -526,9 +526,20 @@ export class SyncManager {
     resourceKey: string | undefined,
     profile: ReturnType<typeof getSyncProfile>
   ): Promise<string> {
-    if (profile.retrievalMode === "drive-download-docx") {
-      const docxBytes = await this.driveClient.downloadFile(accessToken, fileId, resourceKey);
-      return convertDocxToMarkdown(docxBytes);
+    if (profile.retrievalMode === "drive-download-docx" || profile.retrievalMode === "drive-export-docx") {
+      try {
+        const docxBytes =
+          profile.retrievalMode === "drive-export-docx"
+            ? await this.driveClient.exportFile(accessToken, fileId, profile.exportMimeType, resourceKey)
+            : await this.driveClient.downloadFile(accessToken, fileId, resourceKey);
+        return convertDocxToMarkdown(docxBytes);
+      } catch (error) {
+        if (profile.retrievalMode === "drive-export-docx" && error instanceof GoogleApiError && error.reason === "exportSizeLimitExceeded") {
+          return this.driveClient.exportText(accessToken, fileId, "text/markdown", resourceKey);
+        }
+
+        throw error;
+      }
     }
 
     return this.driveClient.exportText(accessToken, fileId, profile.exportMimeType, resourceKey);
@@ -547,7 +558,13 @@ export class SyncManager {
       return this.preparePresentationOutput(markdownFilePath, accessToken, fileId, resourceKey, profile, title, progress);
     }
 
-    progress?.report(profile.retrievalMode === "drive-download-docx" ? "Downloading Word document…" : "Exporting document as Markdown…");
+    if (profile.retrievalMode === "drive-download-docx") {
+      progress?.report("Downloading Word document…");
+    } else if (profile.retrievalMode === "drive-export-docx") {
+      progress?.report("Exporting Google Doc as Word for higher-quality Markdown conversion…");
+    } else {
+      progress?.report("Exporting document as Markdown…");
+    }
     const sourceText = await this.fetchSourceMarkdown(accessToken, fileId, resourceKey, profile);
     if (containsEmbeddedImageData(sourceText)) {
       progress?.report("Extracting embedded images…");
