@@ -377,7 +377,12 @@ export function buildCliErrorPayload(error: unknown): {
       advice: "Run gdrivesync auth login."
     };
   }
-  if (message.includes("requires a") || message.includes("must target") || message.includes("Pass a ")) {
+  if (
+    message.includes("requires") ||
+    message.includes("must target") ||
+    message.includes("Pass a ") ||
+    message.startsWith("Use one of:")
+  ) {
     return {
       code: "INVALID_ARGUMENT",
       message,
@@ -933,18 +938,19 @@ export async function runCli(rawArgs: string[], runtime: CliRuntime, io: CliIo):
   currentIo = io;
   currentRuntime = runtime;
   currentExitCode = 0;
-
-  const parsed = parseCliInput(rawArgs);
+  let parsed: ParsedCliInput | undefined;
 
   try {
+    parsed = parseCliInput(rawArgs);
     await runtime.loadDevelopmentEnv(runtime.cwd);
 
     if (!parsed.command) {
       printUsage();
       return currentExitCode;
     }
+    const parsedInput = parsed;
 
-    const workspaceRoot = resolveWorkspaceRoot(parsed.flags.cwd);
+    const workspaceRoot = resolveWorkspaceRoot(parsedInput.flags.cwd);
     const {
       tokenPath,
       authManager,
@@ -958,14 +964,14 @@ export async function runCli(rawArgs: string[], runtime: CliRuntime, io: CliIo):
       syncManager
     } = runtime.createServices(workspaceRoot);
     const cliProgress =
-      parsed.flags.json
+      parsedInput.flags.json
         ? undefined
         : (message: string) => {
             requireIo().writeStderr(`${message}\n`);
           };
 
     async function getCliImageEnrichmentSettings(): Promise<ImageEnrichmentSettings | undefined> {
-      return resolveCliImageEnrichmentSettings(parsed.flags, () => cliImageEnrichmentConfigStore.read());
+      return resolveCliImageEnrichmentSettings(parsedInput.flags, () => cliImageEnrichmentConfigStore.read());
     }
 
     if (parsed.command === "auth") {
@@ -1477,7 +1483,7 @@ export async function runCli(rawArgs: string[], runtime: CliRuntime, io: CliIo):
       printJson({
         ok: false,
         contractVersion: CLI_JSON_CONTRACT_VERSION,
-        command: getCommandLabel(parsed),
+        command: parsed ? getCommandLabel(parsed) : "unknown",
         error: buildCliErrorPayload(error)
       });
     } else {

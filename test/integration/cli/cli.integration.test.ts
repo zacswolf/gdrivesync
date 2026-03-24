@@ -212,4 +212,22 @@ describe("CLI integration", () => {
       }
     });
   });
+
+  it("keeps parse-time argument failures machine-readable in json mode", async () => {
+    const sandbox = await createSandbox();
+    sandboxes.push(sandbox.root);
+
+    const result = await runCli(["sync", "--json", "--image-enrichment", "banana"], sandbox);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: false,
+      command: "unknown",
+      error: {
+        code: "INVALID_ARGUMENT",
+        recoverable: true
+      }
+    });
+  });
 });
