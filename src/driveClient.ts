@@ -1,4 +1,4 @@
-import { DriveFileMetadata } from "./types";
+import { DriveFileMetadata, DriveUserInfo } from "./types";
 
 type FetchLike = typeof fetch;
 
@@ -23,6 +23,24 @@ interface FileMetadataRequest {
 
 export class DriveClient {
   constructor(private readonly fetchImpl: FetchLike = fetch) {}
+
+  async getCurrentUser(accessToken: string): Promise<DriveUserInfo | undefined> {
+    const url = new URL("https://www.googleapis.com/drive/v3/about");
+    url.searchParams.set("fields", "user(displayName,emailAddress)");
+
+    const response = await this.fetchImpl(url, {
+      headers: {
+        authorization: `Bearer ${accessToken}`
+      }
+    });
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const payload = (await response.json()) as { user?: DriveUserInfo };
+    return payload.user;
+  }
 
   async getFileMetadata(accessToken: string, request: FileMetadataRequest): Promise<DriveFileMetadata> {
     const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.fileId)}`);
@@ -100,7 +118,7 @@ export class DriveClient {
     const details = await response.text();
     if (response.status === 403 || response.status === 404) {
       throw new PickerGrantRequiredError(
-        `The current Google session cannot access Google file ${fileId}. Open it through Google Picker to grant access.`,
+        `The current Google session cannot access Google file ${fileId}. Share it with this account or sign in with a Google account that can read it.`,
         response.status,
         details
       );

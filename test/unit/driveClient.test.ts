@@ -39,7 +39,26 @@ describe("DriveClient", () => {
 
   it("throws a picker access error for inaccessible docs", async () => {
     const client = new DriveClient(async () => mockResponse("forbidden", { status: 403 }));
+    await expect(client.getFileMetadata("token", { fileId: "doc-1" })).rejects.toMatchObject({
+      message: "The current Google session cannot access Google file doc-1. Share it with this account or sign in with a Google account that can read it."
+    });
     await expect(client.getFileMetadata("token", { fileId: "doc-1" })).rejects.toBeInstanceOf(PickerGrantRequiredError);
+  });
+
+  it("returns the signed-in Drive user when available", async () => {
+    const client = new DriveClient(async () =>
+      mockResponse({
+        user: {
+          displayName: "Zac Wolf",
+          emailAddress: "zacwolf3@gmail.com"
+        }
+      })
+    );
+
+    await expect(client.getCurrentUser("token")).resolves.toEqual({
+      displayName: "Zac Wolf",
+      emailAddress: "zacwolf3@gmail.com"
+    });
   });
 
   it("exports text using the requested mime type", async () => {

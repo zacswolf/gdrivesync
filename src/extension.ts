@@ -16,7 +16,8 @@ import {
 import { SyncManager } from "./syncManager";
 import { SecretStorageTokenStore } from "./tokenStores";
 import { ParsedDocInput, PickerSelection, SyncOutcome } from "./types";
-import { parseGoogleDocInput } from "./utils/docUrl";
+import { parseGoogleDocInput, extractGoogleResourceKey } from "./utils/docUrl";
+import { normalizeResolvedGoogleFileSelection, shouldRecoverAccessWithPicker } from "./utils/googleFileSelection";
 import { fromManifestKey, slugifyForFileName } from "./utils/paths";
 
 function isMarkdownUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
@@ -153,6 +154,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     };
   }
 
+  async function getPickerLoginHint(): Promise<string | undefined> {
+    const configuredHint = resolveExtensionGoogleConfig().loginHint;
+    if (configuredHint) {
+      return configuredHint;
+    }
+
+    try {
+      const accessToken = await authManager.getAccessToken();
+      const currentUser = await driveClient.getCurrentUser(accessToken);
+      return currentUser?.emailAddress;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function getConnectedAccountEmail(): Promise<string | undefined> {
+    try {
+      const accessToken = await authManager.getAccessToken();
+      const currentUser = await driveClient.getCurrentUser(accessToken);
+      return currentUser?.emailAddress || resolveExtensionGoogleConfig().loginHint;
+    } catch {
+      return resolveExtensionGoogleConfig().loginHint;
+    }
+  }
+
+  async function buildAccessDeniedMessage(fileId: string): Promise<string> {
+    const connectedAccountEmail = await getConnectedAccountEmail();
+    if (connectedAccountEmail) {
+      return `The connected Google account (${connectedAccountEmail}) cannot access file ${fileId}. Share it with that account, or sign out and sign back in with a Google account that can read it.`;
+    }
+
+    return `The connected Google account cannot access file ${fileId}. Share it with that account, or sign out and sign back in with a Google account that can read it.`;
+  }
+
   function getTargetTypeDescription(profiles = getSupportedSyncProfiles()): string {
     if (profiles.length > 0 && profiles.every((profile) => profile.targetFamily === "csv")) {
       return "CSV";
@@ -242,9 +277,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     allowedProfiles = getSupportedSyncProfiles()
   ): Promise<PickerSelection> {
     const accessToken = await authManager.getAccessToken();
+    const parsedResourceKey = parsedInput.resourceKey || extractGoogleResourceKey(parsedInput.sourceUrl);
     const metadata = await driveClient.getFileMetadata(accessToken, {
       fileId: parsedInput.fileId,
-      resourceKey: parsedInput.resourceKey,
+      resourceKey: parsedResourceKey,
       expectedMimeTypes: allowedProfiles.map((profile) => profile.sourceMimeType),
       sourceTypeLabel: "supported Google file"
     });
@@ -259,12 +295,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       title: metadata.name,
       sourceUrl: metadata.webViewLink || resolvedProfile.buildSourceUrl(metadata.id),
       sourceMimeType: metadata.mimeType,
-      resourceKey: metadata.resourceKey || parsedInput.resourceKey
+      resourceKey: metadata.resourceKey || parsedResourceKey
     };
   }
 
   async function selectDocument(allowedProfiles = getSupportedSyncProfiles()): Promise<PickerSelection | undefined> {
     const pickerOptions = getPickerOptions(allowedProfiles);
+    const pickerOptionsWithHint = {
+      ...pickerOptions,
+      loginHint: await getPickerLoginHint()
+    };
     const selectionMode = await vscode.window.showQuickPick(
       [
         {
@@ -287,8 +327,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (selectionMode.label === "Select from Google Drive") {
-      const pickedFile = await pickerClient.pickDocument(pickerOptions);
-      return pickedFile ? resolveSelectionFromInput(pickedFile, allowedProfiles) : undefined;
+      const pickedFile = await pickerClient.pickDocument(pickerOptionsWithHint);
+      return pickedFile
+        ? normalizeResolvedGoogleFileSelection(pickedFile, allowedProfiles, getTargetTypeDescription(allowedProfiles))
+        : undefined;
     }
 
     const parsedInput = await promptForGoogleFileInput();
@@ -299,12 +341,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try {
       return await resolveSelectionFromInput(parsedInput, allowedProfiles);
     } catch (error) {
-      if (error instanceof PickerGrantRequiredError) {
+      if (shouldRecoverAccessWithPicker(parsedInput, error)) {
         void vscode.window.showInformationMessage(
-          `Google needs one browser confirmation for that ${getSelectionSourceLabel(allowedProfiles)} before it can be linked.`
+          `That shared Google file may need extra link access details. Opening Google Picker to recover them…`
         );
-        const pickedFile = await pickerClient.pickDocument(pickerOptions, parsedInput);
-        return pickedFile ? resolveSelectionFromInput(pickedFile, allowedProfiles) : undefined;
+        const pickedFile = await pickerClient.pickDocument(pickerOptionsWithHint, parsedInput);
+        return pickedFile
+          ? normalizeResolvedGoogleFileSelection(pickedFile, allowedProfiles, getTargetTypeDescription(allowedProfiles))
+          : undefined;
+      }
+
+      if (error instanceof PickerGrantRequiredError) {
+        throw new Error(await buildAccessDeniedMessage(parsedInput.fileId));
       }
 
       throw error;

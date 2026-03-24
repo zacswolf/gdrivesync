@@ -130,6 +130,19 @@
         };
       }
 
+      function extractGoogleResourceKey(input) {
+        if (!input) {
+          return undefined;
+        }
+
+        try {
+          const url = new URL(input);
+          return url.searchParams.get("resourcekey") || url.searchParams.get("resourceKey") || undefined;
+        } catch {
+          return undefined;
+        }
+      }
+
       function validateSiteConfig() {
         const config = window.GDOCSYNC_SITE_CONFIG || {};
         const missingValues = [];
@@ -174,6 +187,38 @@
         redirectUrl.searchParams.set("state", request.rawRequest);
         redirectUrl.searchParams.set("error", error.message || String(error));
         window.location.replace(redirectUrl.toString());
+      }
+
+      async function fetchCanonicalFileMetadata(request, accessToken, selection) {
+        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(selection.fileId)}`);
+        url.searchParams.set("fields", "id,name,mimeType,webViewLink,resourceKey");
+        url.searchParams.set("supportsAllDrives", "true");
+        const resourceKey = selection.resourceKey || extractGoogleResourceKey(selection.sourceUrl);
+        if (resourceKey) {
+          url.searchParams.set("resourceKey", resourceKey);
+        }
+
+        const response = await fetch(url.toString(), {
+          headers: {
+            Authorization: `Bearer ${accessToken}`
+          }
+        });
+        if (!response.ok) {
+          throw new Error(`Google Picker could not finalize access for ${selection.fileId}.`);
+        }
+
+        const payload = await response.json();
+        if (!request.payload.supportedMimeTypes.includes(payload.mimeType)) {
+          throw new Error(`The selected file is not a ${request.payload.sourceTypeLabel}.`);
+        }
+
+        return {
+          fileId: payload.id,
+          title: payload.name || selection.title || request.payload.sourceTypeLabel,
+          sourceUrl: payload.webViewLink || selection.sourceUrl || "",
+          sourceMimeType: payload.mimeType,
+          resourceKey: payload.resourceKey || resourceKey
+        };
       }
 
       function requestGoogleToken(googleWebClientId) {
@@ -228,34 +273,17 @@
         }
 
         setHint(`Trying the pasted file first: ${request.payload.hintFileId}`);
-        const url = new URL(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(request.payload.hintFileId)}`);
-        url.searchParams.set("fields", "id,name,mimeType,webViewLink,resourceKey");
-        url.searchParams.set("supportsAllDrives", "true");
-        if (request.payload.resourceKey) {
-          url.searchParams.set("resourceKey", request.payload.resourceKey);
-        }
-
-        const response = await fetch(url.toString(), {
-          headers: {
-            Authorization: `Bearer ${accessToken}`
-          }
-        });
-        if (!response.ok) {
+        try {
+          return await fetchCanonicalFileMetadata(request, accessToken, {
+            fileId: request.payload.hintFileId,
+            title: request.payload.sourceTypeLabel,
+            sourceUrl: "",
+            sourceMimeType: "",
+            resourceKey: request.payload.resourceKey
+          });
+        } catch {
           return null;
         }
-
-        const payload = await response.json();
-        if (!request.payload.supportedMimeTypes.includes(payload.mimeType)) {
-          throw new Error(`The pasted file is not a ${request.payload.sourceTypeLabel}.`);
-        }
-
-        return {
-          fileId: payload.id,
-          title: payload.name,
-          sourceUrl: payload.webViewLink || "",
-          sourceMimeType: payload.mimeType,
-          resourceKey: payload.resourceKey || request.payload.resourceKey
-        };
       }
 
       function openPicker(config, request, accessToken) {
@@ -283,13 +311,16 @@
 
             if (action === google.picker.Action.PICKED) {
               const doc = data.docs[0];
-              completeSelection(request, {
+              setStatus("Finalizing Google file access…");
+              void fetchCanonicalFileMetadata(request, accessToken, {
                 fileId: doc.id,
                 title: doc.name || doc.title || request.payload.sourceTypeLabel,
                 sourceUrl: doc.url || "",
                 sourceMimeType: doc.mimeType || request.payload.supportedMimeTypes[0] || "",
-                resourceKey: doc.resourceKey
-              });
+                resourceKey: doc.resourceKey || extractGoogleResourceKey(doc.url || "")
+              })
+                .then((selection) => completeSelection(request, selection))
+                .catch((error) => failSelection(request, error));
             }
           })
           .build();

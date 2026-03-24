@@ -2,6 +2,19 @@ import { ParsedDocInput } from "../types";
 
 const GOOGLE_DOC_ID_PATTERN = /^[a-zA-Z0-9_-]{20,}$/;
 
+export function extractGoogleResourceKey(input: string | undefined): string | undefined {
+  if (!input) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(input);
+    return url.searchParams.get("resourcekey") || url.searchParams.get("resourceKey") || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -28,7 +41,7 @@ export function parseGoogleDocInput(input: string): ParsedDocInput | undefined {
       return undefined;
     }
 
-    const resourceKey = url.searchParams.get("resourcekey") || url.searchParams.get("resourceKey") || undefined;
+    const resourceKey = extractGoogleResourceKey(trimmed);
     const fileId = match[1];
     return {
       fileId,

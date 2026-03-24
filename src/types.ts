@@ -67,6 +67,14 @@ export interface PickerRequestPayload {
   loginHint?: string;
 }
 
+export interface ResolvedGoogleFile {
+  fileId: string;
+  title: string;
+  sourceUrl: string;
+  sourceMimeType: string;
+  resourceKey?: string;
+}
+
 export interface PickerSelection {
   profileId: SyncProfileId;
   fileId: string;
@@ -84,6 +92,11 @@ export interface DriveFileMetadata {
   modifiedTime?: string;
   resourceKey?: string;
   webViewLink?: string;
+}
+
+export interface DriveUserInfo {
+  displayName?: string;
+  emailAddress?: string;
 }
 
 export interface ParsedDocInput {

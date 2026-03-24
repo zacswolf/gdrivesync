@@ -18,6 +18,7 @@ import {
   SyncOutputKind
 } from "./types";
 import { sha256Bytes, sha256Text } from "./utils/hash";
+import { extractGoogleResourceKey } from "./utils/docUrl";
 import { containsEmbeddedImageData, extractMarkdownAssets } from "./utils/markdownAssets";
 import { fromManifestKey } from "./utils/paths";
 import { buildSpreadsheetSyncSummary } from "./utils/spreadsheetSyncSummary";
@@ -84,9 +85,10 @@ export class CliSyncManager {
 
     const allowedProfiles = this.getAllowedProfilesForTargetPath(targetPath);
     const accessToken = await this.authManager.getAccessToken();
+    const parsedResourceKey = parsedInput.resourceKey || extractGoogleResourceKey(parsedInput.sourceUrl);
     const metadata = await this.driveClient.getFileMetadata(accessToken, {
       fileId: parsedInput.fileId,
-      resourceKey: parsedInput.resourceKey,
+      resourceKey: parsedResourceKey,
       expectedMimeTypes: allowedProfiles.map((profile) => profile.sourceMimeType),
       sourceTypeLabel: "supported Google file"
     });
@@ -101,7 +103,7 @@ export class CliSyncManager {
       title: metadata.name,
       sourceUrl: metadata.webViewLink || resolvedProfile.buildSourceUrl(metadata.id),
       sourceMimeType: metadata.mimeType,
-      resourceKey: metadata.resourceKey || parsedInput.resourceKey
+      resourceKey: metadata.resourceKey || parsedResourceKey
     };
   }
 

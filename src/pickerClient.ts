@@ -2,20 +2,22 @@ import { randomUUID } from "node:crypto";
 
 import * as vscode from "vscode";
 
-import { GoogleReleaseConfig, ParsedDocInput, PickerRequestPayload } from "./types";
+import { GoogleReleaseConfig, ParsedDocInput, PickerRequestPayload, ResolvedGoogleFile } from "./types";
 import { decodeBase64UrlJson, encodeBase64UrlJson } from "./utils/base64url";
+import { extractGoogleResourceKey } from "./utils/docUrl";
 import { createLocalCallbackServer } from "./utils/localCallbackServer";
 
 interface PickerRequestOptions {
   sourceTypeLabel: string;
   pickerViewId: string;
   pickerMimeTypes: string;
+  loginHint?: string;
 }
 
 export class PickerClient {
   constructor(private readonly configProvider: () => GoogleReleaseConfig) {}
 
-  async pickDocument(requestOptions: PickerRequestOptions, initialFile?: ParsedDocInput): Promise<ParsedDocInput | undefined> {
+  async pickDocument(requestOptions: PickerRequestOptions, initialFile?: ParsedDocInput): Promise<ResolvedGoogleFile | undefined> {
     const callbackServer = await createLocalCallbackServer(
       "/picker/callback",
       `${requestOptions.sourceTypeLabel} selected`,
@@ -30,7 +32,7 @@ export class PickerClient {
       supportedMimeTypes: requestOptions.pickerMimeTypes.split(",").map((value) => value.trim()).filter(Boolean),
       hintFileId: initialFile?.fileId,
       resourceKey: initialFile?.resourceKey,
-      loginHint: this.configProvider().loginHint
+      loginHint: requestOptions.loginHint || this.configProvider().loginHint
     });
     const pickerUrl = new URL(this.configProvider().pickerUrl);
     pickerUrl.hash = new URLSearchParams({ request }).toString();
@@ -69,8 +71,13 @@ export class PickerClient {
 
       return {
         fileId,
+        title: callbackParams.get("title") || requestOptions.sourceTypeLabel,
         sourceUrl: callbackParams.get("sourceUrl") || "",
-        resourceKey: callbackParams.get("resourceKey") || undefined
+        sourceMimeType: callbackParams.get("sourceMimeType") || "",
+        resourceKey:
+          callbackParams.get("resourceKey") ||
+          extractGoogleResourceKey(callbackParams.get("sourceUrl") || undefined) ||
+          undefined
       };
     } finally {
       await callbackServer.dispose();
