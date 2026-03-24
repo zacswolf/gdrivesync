@@ -37,6 +37,12 @@ interface SlideImageSource {
   sourceUrl?: string;
 }
 
+interface DownloadedSlideImage {
+  bytes: Uint8Array;
+  mimeType: string;
+  contentHash: string;
+}
+
 interface ParsedSlide {
   title?: string;
   bodyBlocks: string[][];
@@ -45,6 +51,8 @@ interface ParsedSlide {
 
 const TITLE_PLACEHOLDER_TYPES = new Set(["TITLE", "CENTERED_TITLE"]);
 const BODY_PLACEHOLDER_TYPES = new Set(["BODY", "SUBTITLE", "OBJECT"]);
+const SLIDE_RENDER_CONCURRENCY = 2;
+const SLIDE_IMAGE_DOWNLOAD_CONCURRENCY = 4;
 
 function normalizeRelativePath(value: string): string {
   return value.split(path.sep).join("/");
@@ -61,6 +69,15 @@ function buildDataUri(bytes: Uint8Array, mimeType: string): string {
 function buildAssetFileNameBase(slideIndex: number, imageIndex: number, altText: string): string {
   const suffix = slugifyForFileName(altText || `image-${imageIndex}`);
   return `slide-${slideIndex}-${suffix}`;
+}
+
+function buildAssetDownloadCacheKey(image: SlideImageSource): string {
+  return image.sourceUrl || image.contentUrl;
+}
+
+function buildDeduplicatedAssetFileName(fileNameBase: string, extension: string, contentHash: string): string {
+  const shortHash = contentHash.replace(/^sha256:/, "").slice(0, 12);
+  return `${fileNameBase}-${shortHash}${extension}`;
 }
 
 function buildFrontmatter(deckTitle: string): string {
@@ -212,7 +229,7 @@ function parseSlide(slide: SlidesApiSlide, slideIndex: number): ParsedSlide {
 async function downloadAsset(
   fetchImpl: FetchLike,
   image: SlideImageSource
-): Promise<{ bytes: Uint8Array; mimeType: string }> {
+): Promise<DownloadedSlideImage> {
   const candidateUrls = [image.contentUrl, image.sourceUrl].filter((value): value is string => Boolean(value));
 
   let lastError: Error | undefined;
@@ -225,9 +242,11 @@ async function downloadAsset(
         }
 
         const contentType = response.headers.get("content-type") || "image/png";
+        const bytes = new Uint8Array(await response.arrayBuffer());
         return {
-          bytes: new Uint8Array(await response.arrayBuffer()),
-          mimeType: contentType.split(";")[0]?.trim() || "image/png"
+          bytes,
+          mimeType: contentType.split(";")[0]?.trim() || "image/png",
+          contentHash: sha256Bytes(bytes)
         };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
@@ -236,6 +255,22 @@ async function downloadAsset(
   }
 
   throw new Error(`Failed to download slide image "${image.altText}": ${lastError?.message || "unknown error"}`);
+}
+
+function downloadAssetWithCache(
+  fetchImpl: FetchLike,
+  image: SlideImageSource,
+  downloadCache: Map<string, Promise<DownloadedSlideImage>>
+): Promise<DownloadedSlideImage> {
+  const cacheKey = buildAssetDownloadCacheKey(image);
+  const cached = downloadCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const inFlightDownload = downloadAsset(fetchImpl, image);
+  downloadCache.set(cacheKey, inFlightDownload);
+  return inFlightDownload;
 }
 
 async function mapWithConcurrencyLimit<T, R>(
@@ -269,7 +304,9 @@ async function renderSlideMarkdown(
   markdownFilePath: string,
   assets: GeneratedFilePayload[],
   assetMode: AssetMode,
-  fetchImpl: FetchLike
+  fetchImpl: FetchLike,
+  downloadCache: Map<string, Promise<DownloadedSlideImage>>,
+  assetPathByContentHash: Map<string, string>
 ): Promise<string> {
   const lines: string[] = [];
   if (slide.title) {
@@ -287,9 +324,9 @@ async function renderSlideMarkdown(
   }
 
   const assetsDirectoryName = `${path.parse(markdownFilePath).name}.assets`;
-  const downloadedImages = await mapWithConcurrencyLimit(slide.images, 4, async (image, imageIndex) => {
+  const downloadedImages = await mapWithConcurrencyLimit(slide.images, SLIDE_IMAGE_DOWNLOAD_CONCURRENCY, async (image, imageIndex) => {
     try {
-      const asset = await downloadAsset(fetchImpl, image);
+      const asset = await downloadAssetWithCache(fetchImpl, image, downloadCache);
       return {
         ...image,
         ...asset,
@@ -318,15 +355,32 @@ async function renderSlideMarkdown(
     if (assetMode === "data-uri") {
       imageReference = buildDataUri(image.bytes, image.mimeType);
     } else {
+      const dedupeKey = `${image.mimeType}:${image.contentHash}`;
+      const existingRelativePath = assetPathByContentHash.get(dedupeKey);
       const extension = contentTypeToExtension(image.mimeType);
-      const fileName = `${buildAssetFileNameBase(slideIndex, image.imageIndex + 1, image.altText)}${extension}`;
-      const relativePath = normalizeRelativePath(path.join(assetsDirectoryName, fileName));
-      assets.push({
-        relativePath,
-        bytes: image.bytes,
-        mimeType: image.mimeType,
-        contentHash: sha256Bytes(image.bytes)
-      });
+      const relativePath =
+        existingRelativePath ||
+        normalizeRelativePath(
+          path.join(
+            assetsDirectoryName,
+            buildDeduplicatedAssetFileName(
+              buildAssetFileNameBase(slideIndex, image.imageIndex + 1, image.altText),
+              extension,
+              image.contentHash
+            )
+          )
+        );
+
+      if (!existingRelativePath) {
+        assetPathByContentHash.set(dedupeKey, relativePath);
+        assets.push({
+          relativePath,
+          bytes: image.bytes,
+          mimeType: image.mimeType,
+          contentHash: image.contentHash
+        });
+      }
+
       imageReference = toMarkdownAssetPath(relativePath);
     }
 
@@ -355,9 +409,11 @@ export async function convertSlidesApiPresentationToMarp(
   const parsedSlides = slides.map((slide, index) => parseSlide(slide, index + 1));
   const deckTitle = options.title || presentation.title || parsedSlides.find((slide) => slide.title)?.title || path.parse(markdownFilePath).name;
   const assets: GeneratedFilePayload[] = [];
+  const downloadCache = new Map<string, Promise<DownloadedSlideImage>>();
+  const assetPathByContentHash = new Map<string, string>();
   const slideMarkdown = (
-    await mapWithConcurrencyLimit(parsedSlides, 2, (slide, index) =>
-      renderSlideMarkdown(slide, index + 1, markdownFilePath, assets, assetMode, fetchImpl)
+    await mapWithConcurrencyLimit(parsedSlides, SLIDE_RENDER_CONCURRENCY, (slide, index) =>
+      renderSlideMarkdown(slide, index + 1, markdownFilePath, assets, assetMode, fetchImpl, downloadCache, assetPathByContentHash)
     )
   )
     .join("\n\n---\n\n")

@@ -106,13 +106,13 @@ describe("convertSlidesApiPresentationToMarp", () => {
 
     expect(result.slideCount).toBe(1);
     expect(result.assets).toHaveLength(1);
-    expect(result.assets[0]?.relativePath).toBe("growth-burst.assets/slide-1-diagram.png");
+    expect(result.assets[0]?.relativePath).toMatch(/^growth-burst\.assets\/slide-1-diagram-[a-f0-9]{12}\.png$/);
     expect(result.markdown).toContain("marp: true");
     expect(result.markdown).toContain("Generated via Google Slides API fallback");
     expect(result.markdown).toContain("# Lesson 1");
     expect(result.markdown).toContain("- First point");
     expect(result.markdown).toContain("  - Nested point");
-    expect(result.markdown).toContain("![Diagram](./growth-burst.assets/slide-1-diagram.png)");
+    expect(result.markdown).toContain(`![Diagram](./${result.assets[0]?.relativePath})`);
   });
 
   it("can inline Google Slides API images as data URIs", async () => {
@@ -154,5 +154,68 @@ describe("convertSlidesApiPresentationToMarp", () => {
     expect(result.assets).toEqual([]);
     expect(result.generatedAssetPaths).toEqual([]);
     expect(result.markdown).toContain("data:image/png;base64,");
+  });
+
+  it("deduplicates repeated slide images across a deck", async () => {
+    const imageBytes = Buffer.from(PNG_PIXEL_BASE64, "base64");
+    let fetchCount = 0;
+    const fetchImpl: typeof fetch = async (input) => {
+      fetchCount += 1;
+      const url = String(input);
+      if (url !== "https://images.example.com/shared-logo.png") {
+        throw new Error(`Unexpected URL: ${url}`);
+      }
+
+      return new Response(imageBytes, {
+        status: 200,
+        headers: {
+          "content-type": "image/png"
+        }
+      });
+    };
+
+    const result = await convertSlidesApiPresentationToMarp(
+      "/tmp/growth-burst.md",
+      {
+        title: "Growth Burst",
+        slides: [
+          {
+            objectId: "slide-1",
+            pageElements: [
+              {
+                objectId: "image-1",
+                title: "Shared Logo",
+                image: {
+                  contentUrl: "https://images.example.com/shared-logo.png"
+                }
+              }
+            ]
+          },
+          {
+            objectId: "slide-2",
+            pageElements: [
+              {
+                objectId: "image-2",
+                title: "Shared Logo Again",
+                image: {
+                  contentUrl: "https://images.example.com/shared-logo.png"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        assetMode: "external",
+        title: "Growth Burst"
+      },
+      fetchImpl
+    );
+
+    expect(fetchCount).toBe(1);
+    expect(result.assets).toHaveLength(1);
+    expect(result.generatedAssetPaths).toHaveLength(1);
+    expect(result.markdown).toContain("![Shared Logo](");
+    expect(result.markdown).toContain("![Shared Logo Again](");
   });
 });
