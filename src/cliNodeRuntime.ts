@@ -13,7 +13,7 @@ import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ImageEnrichmentService } from "./imageEnrichment";
 import { EnvironmentOrStoredCloudKeyResolver, KeychainCloudProviderKeyStore } from "./providerKeyStores";
-import { loadDevelopmentEnv, resolveCliGoogleConfig } from "./runtimeConfig";
+import { loadDevelopmentEnv, resolveCliGoogleConfig, shouldLoadCliDevelopmentEnv } from "./runtimeConfig";
 import { SlidesClient } from "./slidesClient";
 import { FileOAuthStateStore } from "./tokenStores";
 
@@ -117,7 +117,9 @@ export function createDefaultCliRuntime(cwd = process.cwd()): CliRuntime {
   return {
     cwd,
     async loadDevelopmentEnv(workdir: string): Promise<void> {
-      await loadDevelopmentEnv(workdir);
+      if (shouldLoadCliDevelopmentEnv()) {
+        await loadDevelopmentEnv(workdir);
+      }
     },
     resolveWorkspaceRoot(cwdFlag?: string): string {
       return path.resolve(cwdFlag || cwd);

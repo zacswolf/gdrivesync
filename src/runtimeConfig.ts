@@ -63,6 +63,10 @@ export async function loadDevelopmentEnv(basePath: string): Promise<void> {
   await loadDotEnvFile(path.join(basePath, ".env.local"), loadedKeys);
 }
 
+export function shouldLoadCliDevelopmentEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.GDRIVESYNC_LOAD_DEV_ENV === "1";
+}
+
 function normalizeBaseUrl(rawValue: string | undefined): string | undefined {
   const candidate = rawValue?.trim();
   if (!candidate) {

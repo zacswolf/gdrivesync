@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_CLI_IMAGE_ENRICHMENT_DEFAULTS } from "../../src/cliImageEnrichmentConfig";
 import { CliIo, CliRuntime, runCli } from "../../src/cliCore";
-import { CorruptStateError } from "../../src/stateErrors";
+import { CorruptStateError, ManifestBusyError } from "../../src/stateErrors";
 
 function createFakeIo(options?: { choices?: unknown[]; secrets?: string[] }) {
   const stdout: string[] = [];
@@ -39,6 +39,7 @@ function createFakeRuntime(options?: {
   envKeys?: Partial<Record<"openai" | "anthropic", string>>;
   configRead?: () => Promise<unknown>;
   defaults?: typeof DEFAULT_CLI_IMAGE_ENRICHMENT_DEFAULTS;
+  authManagerOverrides?: Record<string, unknown>;
 }) {
   const storedKeys = new Map<string, string>(Object.entries(options?.storedKeys || {}));
   const envKeys = new Map<string, string>(Object.entries(options?.envKeys || {}));
@@ -143,6 +144,17 @@ function createFakeRuntime(options?: {
     unlinkFile: vi.fn()
   };
 
+  const authManager = {
+    listAccounts: vi.fn(async () => []),
+    getDefaultAccount: vi.fn(async () => undefined),
+    disconnectAll: vi.fn(async () => ({
+      disconnectedCount: 0,
+      revokeWarnings: []
+    })),
+    disconnectAccount: vi.fn(async () => ({})),
+    ...(options?.authManagerOverrides || {})
+  };
+
   const runtime: CliRuntime = {
     cwd: "/tmp/workspace",
     loadDevelopmentEnv: vi.fn(async () => {}),
@@ -151,10 +163,7 @@ function createFakeRuntime(options?: {
     },
     createServices: vi.fn(() => ({
       tokenPath: "/tmp/home/.gdrivesync-dev-session.json",
-      authManager: {
-        listAccounts: vi.fn(async () => []),
-        getDefaultAccount: vi.fn(async () => undefined)
-      } as never,
+      authManager: authManager as never,
       driveClient: {} as never,
       slidesClient: {} as never,
       cloudKeyStore: cloudKeyStore as never,
@@ -177,7 +186,8 @@ function createFakeRuntime(options?: {
     writtenDefaults,
     syncAllCalls,
     keyStoreActions,
-    testCloudProviderCalls
+    testCloudProviderCalls,
+    authManager
   };
 }
 
@@ -233,6 +243,45 @@ describe("runCli", () => {
       command: "sync",
       error: {
         code: "CLI_CONFIG_CORRUPT"
+      }
+    });
+  });
+
+  it("prints revoke warnings to stderr after human auth logout flows", async () => {
+    const { io, stdout, stderr } = createFakeIo();
+    const runtime = createFakeRuntime({
+      authManagerOverrides: {
+        disconnectAll: vi.fn(async () => ({
+          disconnectedCount: 2,
+          revokeWarnings: ["alpha@example.com: Google token revocation failed (500): nope"]
+        }))
+      }
+    });
+
+    const exitCode = await runCli(["auth", "logout", "--all"], runtime.runtime, io);
+
+    expect(exitCode).toBe(0);
+    expect(stdout.join("")).toContain("Disconnected 2 Google accounts.");
+    expect(stderr.join("")).toContain("Warning: alpha@example.com: Google token revocation failed (500): nope");
+  });
+
+  it("returns a recoverable manifest-busy error payload in json mode", async () => {
+    const { io, stdout } = createFakeIo();
+    const runtime = createFakeRuntime();
+    runtime.syncManager.syncAll = vi.fn(async () => {
+      throw new ManifestBusyError("/tmp/workspace/.gdrivesync.json");
+    });
+
+    const exitCode = await runCli(["sync", "--all", "--json"], runtime.runtime, io);
+
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(stdout.join(""))).toMatchObject({
+      ok: false,
+      command: "sync",
+      error: {
+        code: "MANIFEST_BUSY",
+        recoverable: true,
+        path: "/tmp/workspace/.gdrivesync.json"
       }
     });
   });

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 import type { SecretStorage } from "vscode";
@@ -6,6 +6,7 @@ import type { SecretStorage } from "vscode";
 import { normalizeStoredOAuthSession, normalizeStoredOAuthState } from "./sessionSchema";
 import { CorruptStateError } from "./stateErrors";
 import { ConnectedGoogleAccount, OAuthStateStore, StoredOAuthState } from "./types";
+import { writeFileAtomically } from "./utils/atomicWrite";
 
 const SECRET_STORAGE_INDEX_KEY = "gdocSync.googleOAuthAccounts";
 const SECRET_STORAGE_SESSION_KEY_PREFIX = "gdocSync.googleOAuthAccount.";
@@ -214,8 +215,10 @@ export class FileOAuthStateStore implements OAuthStateStore {
   }
 
   async save(state: StoredOAuthState): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
-    await writeFile(this.filePath, `${JSON.stringify(normalizeState(state), null, 2)}\n`, "utf8");
+    await writeFileAtomically(this.filePath, `${JSON.stringify(normalizeState(state), null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600
+    });
   }
 
   async clear(): Promise<void> {

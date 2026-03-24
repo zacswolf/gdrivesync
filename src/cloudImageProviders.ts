@@ -1,4 +1,6 @@
 import { GeneratedFilePayload } from "./types";
+import { RequestTimeoutError, fetchWithTimeout } from "./utils/fetchTimeout";
+import { runWithConcurrency } from "./utils/runWithConcurrency";
 
 export type CloudImageProvider = "openai" | "anthropic";
 export type CloudCredentialSource = "environment" | "keychain" | "secret-storage" | "missing";
@@ -47,6 +49,7 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const CLOUD_DETAIL_MAX_LENGTH = 500;
 const CLOUD_ALT_MAX_LENGTH = 140;
 const REQUEST_CONCURRENCY = 2;
+const DEFAULT_CLOUD_REQUEST_TIMEOUT_MS = 30_000;
 
 function normalizeWhitespace(value: string | undefined): string {
   if (!value) {
@@ -139,62 +142,53 @@ function parseAnthropicOutput(payload: Record<string, unknown>): string {
     .trim();
 }
 
-async function runWithConcurrency<TInput, TOutput>(
-  items: TInput[],
-  concurrency: number,
-  task: (item: TInput) => Promise<TOutput>
-): Promise<TOutput[]> {
-  const results: TOutput[] = new Array(items.length);
-  let cursor = 0;
-
-  async function worker(): Promise<void> {
-    while (true) {
-      const currentIndex = cursor;
-      cursor += 1;
-      if (currentIndex >= items.length) {
-        return;
-      }
-
-      results[currentIndex] = await task(items[currentIndex]);
-    }
-  }
-
-  const workerCount = Math.min(concurrency, items.length);
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return results;
-}
-
 async function callOpenAi(
+  fetchImpl: typeof fetch,
+  requestTimeoutMs: number,
   apiKey: string,
   model: string,
   request: CloudImageEnrichmentRequest
 ): Promise<CloudImageEnrichmentResult> {
   const imageDataUrl = `data:${request.asset.mimeType};base64,${Buffer.from(request.asset.bytes).toString("base64")}`;
-  const response = await fetch(OPENAI_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      input: [
-        {
-          role: "user",
-          content: [
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      fetchImpl,
+      OPENAI_ENDPOINT,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          input: [
             {
-              type: "input_text",
-              text: buildSharedPrompt(request.currentAltText)
-            },
-            {
-              type: "input_image",
-              image_url: imageDataUrl
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: buildSharedPrompt(request.currentAltText)
+                },
+                {
+                  type: "input_image",
+                  image_url: imageDataUrl
+                }
+              ]
             }
           ]
-        }
-      ]
-    })
-  });
+        })
+      },
+      requestTimeoutMs,
+      "OpenAI image enrichment request timed out."
+    );
+  } catch (error) {
+    if (error instanceof RequestTimeoutError) {
+      throw new Error(error.message);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const detail = await response.text();
@@ -206,41 +200,57 @@ async function callOpenAi(
 }
 
 async function callAnthropic(
+  fetchImpl: typeof fetch,
+  requestTimeoutMs: number,
   apiKey: string,
   model: string,
   request: CloudImageEnrichmentRequest
 ): Promise<CloudImageEnrichmentResult> {
-  const response = await fetch(ANTHROPIC_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": ANTHROPIC_VERSION,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 300,
-      messages: [
-        {
-          role: "user",
-          content: [
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      fetchImpl,
+      ANTHROPIC_ENDPOINT,
+      {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": ANTHROPIC_VERSION,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 300,
+          messages: [
             {
-              type: "text",
-              text: buildSharedPrompt(request.currentAltText)
-            },
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: request.asset.mimeType,
-                data: Buffer.from(request.asset.bytes).toString("base64")
-              }
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: buildSharedPrompt(request.currentAltText)
+                },
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: request.asset.mimeType,
+                    data: Buffer.from(request.asset.bytes).toString("base64")
+                  }
+                }
+              ]
             }
           ]
-        }
-      ]
-    })
-  });
+        })
+      },
+      requestTimeoutMs,
+      "Anthropic image enrichment request timed out."
+    );
+  } catch (error) {
+    if (error instanceof RequestTimeoutError) {
+      throw new Error(error.message);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const detail = await response.text();
@@ -251,28 +261,42 @@ async function callAnthropic(
   return normalizeCloudResult(request.asset.contentHash, extractJsonObject(parseAnthropicOutput(payload)));
 }
 
-async function testOpenAi(apiKey: string, model: string): Promise<void> {
-  const response = await fetch(OPENAI_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      input: [
-        {
-          role: "user",
-          content: [
+async function testOpenAi(fetchImpl: typeof fetch, requestTimeoutMs: number, apiKey: string, model: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      fetchImpl,
+      OPENAI_ENDPOINT,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          input: [
             {
-              type: "input_text",
-              text: 'Reply with exactly {"ok":true}.'
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: 'Reply with exactly {"ok":true}.'
+                }
+              ]
             }
           ]
-        }
-      ]
-    })
-  });
+        })
+      },
+      requestTimeoutMs,
+      "OpenAI test request timed out."
+    );
+  } catch (error) {
+    if (error instanceof RequestTimeoutError) {
+      throw new Error(error.message);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const detail = await response.text();
@@ -280,30 +304,44 @@ async function testOpenAi(apiKey: string, model: string): Promise<void> {
   }
 }
 
-async function testAnthropic(apiKey: string, model: string): Promise<void> {
-  const response = await fetch(ANTHROPIC_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": ANTHROPIC_VERSION,
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: 32,
-      messages: [
-        {
-          role: "user",
-          content: [
+async function testAnthropic(fetchImpl: typeof fetch, requestTimeoutMs: number, apiKey: string, model: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      fetchImpl,
+      ANTHROPIC_ENDPOINT,
+      {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": ANTHROPIC_VERSION,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 32,
+          messages: [
             {
-              type: "text",
-              text: 'Reply with exactly {"ok":true}.'
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: 'Reply with exactly {"ok":true}.'
+                }
+              ]
             }
           ]
-        }
-      ]
-    })
-  });
+        })
+      },
+      requestTimeoutMs,
+      "Anthropic test request timed out."
+    );
+  } catch (error) {
+    if (error instanceof RequestTimeoutError) {
+      throw new Error(error.message);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     const detail = await response.text();
@@ -324,6 +362,11 @@ export function formatCloudProviderLabel(provider: CloudImageProvider): string {
 }
 
 export class HttpCloudImageInferenceClient implements CloudImageInferenceClient {
+  constructor(
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly requestTimeoutMs = DEFAULT_CLOUD_REQUEST_TIMEOUT_MS
+  ) {}
+
   async enrichImages(
     provider: CloudImageProvider,
     apiKey: string,
@@ -337,8 +380,8 @@ export class HttpCloudImageInferenceClient implements CloudImageInferenceClient 
       try {
         const result =
           provider === "openai"
-            ? await callOpenAi(apiKey, model, request)
-            : await callAnthropic(apiKey, model, request);
+            ? await callOpenAi(this.fetchImpl, this.requestTimeoutMs, apiKey, model, request)
+            : await callAnthropic(this.fetchImpl, this.requestTimeoutMs, apiKey, model, request);
         results.set(request.asset.contentHash, result);
       } catch (error) {
         failureMessages.push(error instanceof Error ? error.message : String(error));
@@ -353,10 +396,10 @@ export class HttpCloudImageInferenceClient implements CloudImageInferenceClient 
 
   async testProvider(provider: CloudImageProvider, apiKey: string, model: string): Promise<void> {
     if (provider === "openai") {
-      await testOpenAi(apiKey, model);
+      await testOpenAi(this.fetchImpl, this.requestTimeoutMs, apiKey, model);
       return;
     }
 
-    await testAnthropic(apiKey, model);
+    await testAnthropic(this.fetchImpl, this.requestTimeoutMs, apiKey, model);
   }
 }

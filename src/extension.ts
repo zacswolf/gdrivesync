@@ -24,6 +24,8 @@ import { parseGoogleDocInput, extractGoogleResourceKey } from "./utils/docUrl";
 import { normalizeResolvedGoogleFileSelection, shouldRecoverAccessWithPicker } from "./utils/googleFileSelection";
 import { fromManifestKey, slugifyForFileName } from "./utils/paths";
 
+let activeSyncManager: SyncManager | undefined;
+
 function isMarkdownUri(uri: vscode.Uri | undefined): uri is vscode.Uri {
   return uri !== undefined && uri.fsPath.toLowerCase().endsWith(".md");
 }
@@ -103,7 +105,9 @@ async function promptForGoogleFileInput(): Promise<ParsedDocInput | undefined> {
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  await loadDevelopmentEnv(context.extensionPath);
+  if (context.extensionMode !== vscode.ExtensionMode.Production) {
+    await loadDevelopmentEnv(context.extensionPath);
+  }
 
   function resolveExtensionGoogleConfig() {
     const config = vscode.workspace.getConfiguration("gdocSync");
@@ -223,6 +227,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
   );
+  activeSyncManager = syncManager;
+  context.subscriptions.push({
+    dispose: () => {
+      syncManager.dispose();
+      if (activeSyncManager === syncManager) {
+        activeSyncManager = undefined;
+      }
+    }
+  });
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const codeLensEmitter = new vscode.EventEmitter<void>();
 
@@ -1292,12 +1305,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (selection === "disconnect-all") {
-      const disconnectedCount = await authManager.disconnectAll();
-      logInfo(`Disconnected all Google accounts (${disconnectedCount}).`);
+      const disconnectResult = await authManager.disconnectAll();
+      logInfo(`Disconnected all Google accounts (${disconnectResult.disconnectedCount}).`);
+      for (const warning of disconnectResult.revokeWarnings) {
+        logInfo(`Google revoke warning: ${warning}`);
+      }
       await refreshUi();
       void vscode.window.showInformationMessage(
-        disconnectedCount === 1 ? "Disconnected 1 Google account." : `Disconnected ${disconnectedCount} Google accounts.`
+        disconnectResult.disconnectedCount === 1
+          ? "Disconnected 1 Google account."
+          : `Disconnected ${disconnectResult.disconnectedCount} Google accounts.`
       );
+      if (disconnectResult.revokeWarnings.length > 0) {
+        void vscode.window.showWarningMessage(
+          "Some Google tokens could not be revoked remotely. The local accounts were removed, but you may still want to review connected apps in your Google account."
+        );
+      }
       return;
     }
 
@@ -1306,13 +1329,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return;
     }
 
-    const disconnectedAccount = await authManager.disconnectAccount(selection.accountId);
-    if (disconnectedAccount) {
-      logInfo(`Disconnected ${formatAccountLabel(disconnectedAccount)}.`);
+    const disconnectResult = await authManager.disconnectAccount(selection.accountId);
+    if (disconnectResult.account) {
+      logInfo(`Disconnected ${formatAccountLabel(disconnectResult.account)}.`);
+    }
+    if (disconnectResult.revokeWarning) {
+      logInfo(`Google revoke warning: ${disconnectResult.revokeWarning}`);
     }
     await refreshUi();
-    if (disconnectedAccount) {
-      void vscode.window.showInformationMessage(`Disconnected ${formatAccountLabel(disconnectedAccount)}.`);
+    if (disconnectResult.account) {
+      void vscode.window.showInformationMessage(`Disconnected ${formatAccountLabel(disconnectResult.account)}.`);
+    }
+    if (disconnectResult.revokeWarning) {
+      void vscode.window.showWarningMessage(
+        "Google could not confirm token revocation remotely. The local account was removed, but you may still want to review connected apps in your Google account."
+      );
     }
   }
 
@@ -1594,4 +1625,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await refreshUi();
 }
 
-export function deactivate(): void {}
+export function deactivate(): void {
+  activeSyncManager?.dispose();
+  activeSyncManager = undefined;
+}

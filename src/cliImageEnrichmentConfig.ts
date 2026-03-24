@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { ImageEnrichmentProvider, ImageEnrichmentStoreMode } from "./imageEnrichment";
 import { CloudImageProvider } from "./cloudImageProviders";
 import { CorruptStateError } from "./stateErrors";
+import { writeFileAtomically } from "./utils/atomicWrite";
 
 export interface CliImageEnrichmentDefaults {
   mode: "off" | "local" | "cloud";
@@ -147,7 +148,6 @@ export class CliImageEnrichmentConfigStore {
   }
 
   async write(defaults: CliImageEnrichmentDefaults): Promise<void> {
-    await mkdir(path.dirname(this.filePath), { recursive: true });
     const payload: StoredCliImageEnrichmentConfig = {
       version: 1,
       imageEnrichment: {
@@ -159,6 +159,8 @@ export class CliImageEnrichmentConfigStore {
         store: defaults.store
       }
     };
-    await writeFile(this.filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+    await writeFileAtomically(this.filePath, `${JSON.stringify(payload, null, 2)}\n`, {
+      encoding: "utf8"
+    });
   }
 }

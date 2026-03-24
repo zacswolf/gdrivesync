@@ -7,13 +7,24 @@ export interface LocalCallbackServer {
   dispose(): Promise<void>;
 }
 
-function renderResponseHtml(title: string, body: string): string {
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export function renderResponseHtml(title: string, body: string): string {
+  const safeTitle = escapeHtml(title);
+  const safeBody = escapeHtml(body);
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${title}</title>
+    <title>${safeTitle}</title>
     <style>
       body {
         font-family: ui-sans-serif, system-ui, sans-serif;
@@ -36,8 +47,8 @@ function renderResponseHtml(title: string, body: string): string {
   </head>
   <body>
     <main>
-      <h1>${title}</h1>
-      <p>${body}</p>
+      <h1>${safeTitle}</h1>
+      <p>${safeBody}</p>
       <p>You can return to VS Code.</p>
     </main>
   </body>

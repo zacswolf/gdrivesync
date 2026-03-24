@@ -21,7 +21,7 @@ import {
   getProviderEnvVar
 } from "./providerKeyStores";
 import { SlidesClient } from "./slidesClient";
-import { CorruptStateError } from "./stateErrors";
+import { CorruptStateError, ManifestBusyError } from "./stateErrors";
 import { resolveSyncProfileForMimeType } from "./syncProfiles";
 import { buildCliSyncAllSummary } from "./utils/cliSyncSummary";
 import { parseGoogleDocInput } from "./utils/docUrl";
@@ -350,6 +350,16 @@ export function buildCliErrorPayload(error: unknown): {
     };
   }
 
+  if (error instanceof ManifestBusyError) {
+    return {
+      code: "MANIFEST_BUSY",
+      message: error.message,
+      recoverable: true,
+      advice: "Retry in a moment after the other sync or command finishes.",
+      path: error.manifestPath
+    };
+  }
+
   if (error instanceof PickerGrantRequiredError) {
     return {
       code: "GOOGLE_ACCESS_DENIED",
@@ -440,6 +450,10 @@ export function buildCliErrorPayload(error: unknown): {
 
 function printText(value: string): void {
   requireIo().writeStdout(`${value}\n`);
+}
+
+function printError(value: string): void {
+  requireIo().writeStderr(`${value}\n`);
 }
 
 function markFailure(): void {
@@ -994,13 +1008,18 @@ export async function runCli(rawArgs: string[], runtime: CliRuntime, io: CliIo):
     }
     if (parsed.subcommand === "logout") {
       if (parsed.flags.all) {
-        const disconnectedCount = await authManager.disconnectAll();
+        const disconnectResult = await authManager.disconnectAll();
         if (parsed.flags.json) {
-          printJsonSuccess(parsed, { disconnectedCount });
+          printJsonSuccess(parsed, disconnectResult);
         } else {
           printText(
-            disconnectedCount === 1 ? "Disconnected 1 Google account." : `Disconnected ${disconnectedCount} Google accounts.`
+            disconnectResult.disconnectedCount === 1
+              ? "Disconnected 1 Google account."
+              : `Disconnected ${disconnectResult.disconnectedCount} Google accounts.`
           );
+          for (const warning of disconnectResult.revokeWarnings) {
+            printError(`Warning: ${warning}`);
+          }
         }
         return currentExitCode;
       }
@@ -1009,18 +1028,22 @@ export async function runCli(rawArgs: string[], runtime: CliRuntime, io: CliIo):
         throw new Error("auth logout requires --account <email-or-id> or --all.");
       }
 
-      const disconnectedAccount = await authManager.disconnectAccount(parsed.flags.account);
+      const disconnectResult = await authManager.disconnectAccount(parsed.flags.account);
       if (parsed.flags.json) {
         printJsonSuccess(parsed, {
-          disconnected: Boolean(disconnectedAccount),
-          account: disconnectedAccount ? serializeAccount(disconnectedAccount) : undefined
+          disconnected: Boolean(disconnectResult.account),
+          account: disconnectResult.account ? serializeAccount(disconnectResult.account) : undefined,
+          revokeWarning: disconnectResult.revokeWarning
         });
       } else {
         printText(
-          disconnectedAccount
-            ? `Disconnected ${disconnectedAccount.accountEmail || disconnectedAccount.accountId}.`
+          disconnectResult.account
+            ? `Disconnected ${disconnectResult.account.accountEmail || disconnectResult.account.accountId}.`
             : `No connected Google account matched ${parsed.flags.account}.`
         );
+        if (disconnectResult.revokeWarning) {
+          printError(`Warning: ${disconnectResult.revokeWarning}`);
+        }
       }
       return currentExitCode;
     }

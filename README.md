@@ -64,9 +64,9 @@ Agent-friendly qualities:
 
 ## Development
 
-For local setup, your own Google Cloud project, and your own hosted picker site, see [docs/development.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/development.md).
+For local setup, your own Google Cloud project, and your own hosted picker site, see [docs/development.md](docs/development.md).
 
-For generic public-release prep, see [docs/release-checklist.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/release-checklist.md).
+For generic public-release prep, see [docs/release-checklist.md](docs/release-checklist.md).
 
 Quick local loop:
 
@@ -294,7 +294,7 @@ If you are building agent integrations, prefer:
 - `link` + `sync` for durable workspace state
 - `status --all --json` before `sync --all --json` when you want to reason about what will be touched
 
-There is also a short agent-focused usage guide in [docs/agent-cli.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/agent-cli.md).
+There is also a short agent-focused usage guide in [docs/agent-cli.md](docs/agent-cli.md).
 
 ## Image enrichment
 
@@ -398,6 +398,7 @@ The CLI is intended to be a real integration surface for agent builders, not jus
 - Presentation sync targets Marp-flavored Markdown and focuses on slide text plus extracted images rather than full visual layout fidelity
 - Very large native Google Slides decks may bypass Drive export and use the Google Slides API fallback automatically
 - Spreadsheet sync only supports native Google Sheets and `.xlsx`
+- Spreadsheet parsing relies on the current `xlsx` package, which has open upstream advisories with no published fix yet. This is a known upstream dependency risk, not a hidden one. GDriveSync only parses files you explicitly pull from your own Google Drive, and the project tracks upstream changes here instead of pretending the risk is solved locally.
 - Cloud image enrichment is explicit and opt-in; it requires user-supplied OpenAI or Anthropic credentials
 - Apple Vision enrichment requires macOS plus local Swift compiler availability; otherwise GDriveSync falls back to Tesseract when installed
 - Linked files must live inside an open VS Code workspace folder

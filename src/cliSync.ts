@@ -25,6 +25,7 @@ import { sha256Bytes, sha256Text } from "./utils/hash";
 import { extractGoogleResourceKey } from "./utils/docUrl";
 import { containsEmbeddedImageData, extractMarkdownAssets } from "./utils/markdownAssets";
 import { fromManifestKey } from "./utils/paths";
+import { runWithConcurrency } from "./utils/runWithConcurrency";
 import { buildSpreadsheetSyncSummary } from "./utils/spreadsheetSyncSummary";
 import { parseWorkbookToCsvOutput } from "./workbookCsv";
 
@@ -70,6 +71,8 @@ interface CliExportOptions {
   imageEnrichmentSettings?: ImageEnrichmentSettings;
   progress?: (message: string) => void;
 }
+
+const SYNC_ALL_CONCURRENCY = 3;
 
 export class CliSyncManager {
   constructor(
@@ -160,43 +163,49 @@ export class CliSyncManager {
 
   async syncAll(options: CliSyncOptions = {}): Promise<CliBatchSyncResult> {
     const linkedFiles = await this.manifestStore.listLinkedFiles();
-    const results: Array<{ file: string; outcome: CliSyncOutcome }> = [];
+    const results = await runWithConcurrency(
+      linkedFiles.map((linkedFile, index) => ({ linkedFile, index })),
+      SYNC_ALL_CONCURRENCY,
+      async ({ linkedFile, index }) => {
+        let outcome: CliSyncOutcome;
+        try {
+          const scopedOptions =
+            options.progress
+              ? {
+                  ...options,
+                  progress: (message: string) =>
+                    options.progress?.(`${index + 1}/${linkedFiles.length}: ${path.basename(linkedFile.filePath)} — ${message}`)
+                }
+              : options;
+          outcome = await this.syncFile(linkedFile.filePath, scopedOptions);
+        } catch (error) {
+          outcome = {
+            status: "failed",
+            message: this.toErrorMessage(error)
+          };
+        }
+
+        return {
+          file: linkedFile.filePath,
+          outcome
+        };
+      }
+    );
+
     let syncedCount = 0;
     let skippedCount = 0;
     let cancelledCount = 0;
     let failedCount = 0;
-
-    for (const linkedFile of linkedFiles) {
-      let outcome: CliSyncOutcome;
-      try {
-        const scopedOptions =
-          options.progress
-            ? {
-                ...options,
-                progress: (message: string) => options.progress?.(`${results.length + 1}/${linkedFiles.length}: ${path.basename(linkedFile.filePath)} — ${message}`)
-              }
-            : options;
-        outcome = await this.syncFile(linkedFile.filePath, scopedOptions);
-      } catch (error) {
-        failedCount += 1;
-        outcome = {
-          status: "failed",
-          message: this.toErrorMessage(error)
-        };
-      }
-
-      if (outcome.status === "synced") {
+    for (const result of results) {
+      if (result.outcome.status === "synced") {
         syncedCount += 1;
-      } else if (outcome.status === "skipped") {
+      } else if (result.outcome.status === "skipped") {
         skippedCount += 1;
-      } else if (outcome.status === "cancelled") {
+      } else if (result.outcome.status === "cancelled") {
         cancelledCount += 1;
+      } else if (result.outcome.status === "failed") {
+        failedCount += 1;
       }
-
-      results.push({
-        file: linkedFile.filePath,
-        outcome
-      });
     }
 
     return { results, syncedCount, skippedCount, cancelledCount, failedCount };

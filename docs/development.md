@@ -2,7 +2,7 @@
 
 This guide is for local development, your own Google Cloud project, and your own hosted picker site.
 
-For generic public-release steps, use [docs/release-checklist.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/release-checklist.md). Keep personal production details in a private, gitignored maintainer notes file instead of this guide.
+For generic public-release steps, use [release-checklist.md](release-checklist.md). Keep personal production details in a private, gitignored maintainer notes file instead of this guide.
 
 ## Local quickstart
 
@@ -26,7 +26,7 @@ cp .env.example .env
 - optionally `GDRIVESYNC_LOGIN_HINT` to reduce repeated account selection during development
 - optionally `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` if you want to test CLI cloud image enrichment without using keychain login
 
-The extension loads `.env` and `.env.local` from the repo root in development.
+The extension only loads `.env` and `.env.local` in VS Code development/test hosts.
 
 You can also set local overrides through VS Code user settings:
 
@@ -40,6 +40,7 @@ Important distinction:
 - `GDRIVESYNC_HOSTED_BASE_URL` is only for hosted picker flows and hosted link-share recovery
 - extension cloud provider keys are stored in VS Code `SecretStorage`, not in `.env`
 - CLI cloud provider keys can come from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` or from `gdrivesync ai auth login <provider>`
+- installed `gdrivesync` does not auto-load `.env`; repo-local `npm run cli -- ...` keeps that convenience for development only
 
 4. Build and test:
 
@@ -85,11 +86,11 @@ The hosted site needs:
 
 ## Hosted picker site
 
-The hosted site lives under [site/public](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public).
+The hosted site lives under [../site/public](../site/public).
 
 Hosted picker usage is explicit. Set `GDRIVESYNC_HOSTED_BASE_URL` or `gdocSync.development.hostedBaseUrl` when you want picker-based selection or hosted link-share recovery.
 
-Keep [site/public/site-config.js](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public/site-config.js) as a placeholder in git. Inject real production values during deployment.
+Keep [../site/public/site-config.js](../site/public/site-config.js) as a placeholder in git. Inject real production values during deployment.
 
 Required routes:
 
@@ -101,9 +102,9 @@ No Worker is required for the current static-site deployment.
 
 ## Cloudflare Pages deployment
 
-Deploy [site/public](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public) as a static site on Cloudflare Pages.
+Deploy [../site/public](../site/public) as a static site on Cloudflare Pages.
 
-The deploy workflow is in [.github/workflows/deploy-pages.yml](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/.github/workflows/deploy-pages.yml).
+The deploy workflow is in [../.github/workflows/deploy-pages.yml](../.github/workflows/deploy-pages.yml).
 
 Expected GitHub secrets:
 

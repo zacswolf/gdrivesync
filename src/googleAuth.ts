@@ -17,6 +17,16 @@ import { hasRequiredScopes } from "./utils/oauthScopes";
 
 type FetchLike = typeof fetch;
 
+export interface DisconnectAccountResult {
+  account?: ConnectedGoogleAccount;
+  revokeWarning?: string;
+}
+
+export interface DisconnectAllResult {
+  disconnectedCount: number;
+  revokeWarnings: string[];
+}
+
 function buildCodeVerifier(): string {
   return Buffer.from(randomUUID().repeat(2), "utf8").toString("base64url");
 }
@@ -87,13 +97,23 @@ async function revokeSession(fetchImpl: FetchLike, session: StoredOAuthSession |
   const token = session.refreshToken || session.accessToken;
   const revokeUrl = new URL("https://oauth2.googleapis.com/revoke");
   const revokeBody = new URLSearchParams({ token });
-  await fetchImpl(revokeUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded"
-    },
-    body: revokeBody.toString()
-  }).catch(() => undefined);
+  let response: Response;
+  try {
+    response = await fetchImpl(revokeUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body: revokeBody.toString()
+    });
+  } catch (error) {
+    throw new Error(`Google token revocation request failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Google token revocation failed (${response.status}): ${details || response.statusText}`);
+  }
 }
 
 export class GoogleAuthManager {
@@ -194,14 +214,19 @@ export class GoogleAuthManager {
     return nextState.accounts[account.accountId];
   }
 
-  async disconnectAccount(accountRef: string): Promise<ConnectedGoogleAccount | undefined> {
+  async disconnectAccount(accountRef: string): Promise<DisconnectAccountResult> {
     const state = await this.loadState();
     const account = this.tryResolveAccountFromState(state, accountRef);
     if (!account) {
-      return undefined;
+      return {};
     }
 
-    await revokeSession(this.fetchImpl, account.session);
+    let revokeWarning: string | undefined;
+    try {
+      await revokeSession(this.fetchImpl, account.session);
+    } catch (error) {
+      revokeWarning = error instanceof Error ? error.message : String(error);
+    }
     const nextAccounts = { ...state.accounts };
     delete nextAccounts[account.accountId];
     const nextState = normalizeState({
@@ -214,17 +239,26 @@ export class GoogleAuthManager {
     } else {
       await this.stateStore.save(nextState);
     }
-    return account;
+    return { account, revokeWarning };
   }
 
-  async disconnectAll(): Promise<number> {
+  async disconnectAll(): Promise<DisconnectAllResult> {
     const state = await this.loadState();
     const accounts = Object.values(state.accounts);
+    const revokeWarnings: string[] = [];
     for (const account of accounts) {
-      await revokeSession(this.fetchImpl, account.session);
+      try {
+        await revokeSession(this.fetchImpl, account.session);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        revokeWarnings.push(`${account.accountEmail || account.accountId}: ${detail}`);
+      }
     }
     await this.stateStore.clear();
-    return accounts.length;
+    return {
+      disconnectedCount: accounts.length,
+      revokeWarnings
+    };
   }
 
   async getAccessToken(accountId?: string): Promise<{ account: ConnectedGoogleAccount; accessToken: string }> {

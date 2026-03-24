@@ -103,6 +103,23 @@ describe("CLI integration", () => {
     });
   });
 
+  it("does not auto-load .env for the published CLI path", async () => {
+    const sandbox = await createSandbox();
+    sandboxes.push(sandbox.root);
+    await writeFile(path.join(sandbox.workspace, ".env"), "GDRIVESYNC_HOSTED_BASE_URL=https://example.test\n", "utf8");
+
+    const result = await runCli(["doctor", "--cwd", sandbox.workspace, "--json"], sandbox);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    const payload = JSON.parse(result.stdout);
+    expect(payload).toMatchObject({
+      ok: true,
+      command: "doctor"
+    });
+    expect(payload.data.config.hostedBaseUrl).toBeUndefined();
+  });
+
   it("repairs a corrupt CLI image-enrichment config through doctor --repair", async () => {
     const sandbox = await createSandbox();
     sandboxes.push(sandbox.root);

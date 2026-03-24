@@ -24,3 +24,11 @@ export class CorruptStateError extends Error {
     super(message || defaultCorruptionMessage(kind, stateLocation));
   }
 }
+
+export class ManifestBusyError extends Error {
+  readonly name = "ManifestBusyError";
+
+  constructor(readonly manifestPath: string) {
+    super(`The GDriveSync manifest at ${manifestPath} is busy because another sync may already be updating it. Try again in a moment.`);
+  }
+}

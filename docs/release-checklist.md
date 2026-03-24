@@ -24,6 +24,8 @@ Keep personal production details such as exact domains, Google Cloud project IDs
   - move the OAuth consent screen to `In production`
   - verify the right scopes, branding, and support contact are set
   - verify non-test users can authorize successfully
+- do not publish publicly while the OAuth app is still limited to test users
+- verify the published desktop OAuth client and consent screen branding match the release you are shipping
 
 ## Package and versioning
 
@@ -31,6 +33,7 @@ Keep personal production details such as exact domains, Google Cloud project IDs
 - update `CHANGELOG.md`
 - keep `.gdrivesync.json` schema versioning separate from package semver
 - only change manifest schema when the persisted manifest format actually changes
+- review the current `xlsx` upstream advisory status, decide whether you still accept that upstream risk for this release, and keep the public docs accurate if it remains unresolved
 
 ## Publish targets
 

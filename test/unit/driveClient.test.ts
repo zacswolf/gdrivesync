@@ -102,4 +102,76 @@ describe("DriveClient", () => {
     const client = new DriveClient(async () => mockResponse("Hello"));
     await expect(client.downloadFile("token", "doc-1")).resolves.toEqual(Uint8Array.from(Buffer.from("Hello")));
   });
+
+  it("times out stalled Google Drive requests", async () => {
+    const client = new DriveClient(
+      async (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              const error = new Error("aborted");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true }
+          );
+        }),
+      1
+    );
+
+    await expect(client.getFileMetadata("token", { fileId: "doc-1" })).rejects.toMatchObject({
+      message: "Google Drive request timed out.",
+      status: 408
+    });
+    await expect(client.getFileMetadata("token", { fileId: "doc-1" })).rejects.toBeInstanceOf(GoogleApiError);
+  });
+
+  it("retries transient Google API failures before succeeding", async () => {
+    let attempts = 0;
+    const sleepCalls: number[] = [];
+    const client = new DriveClient(
+      async () => {
+        attempts += 1;
+        if (attempts < 3) {
+          return mockResponse("busy", { status: 503 });
+        }
+
+        return mockResponse({
+          id: "doc-1",
+          name: "Recovered",
+          mimeType: "application/vnd.google-apps.document",
+          version: "13"
+        });
+      },
+      1_000,
+      [5, 10],
+      async (durationMs) => {
+        sleepCalls.push(durationMs);
+      }
+    );
+
+    await expect(client.getFileMetadata("token", { fileId: "doc-1" })).resolves.toMatchObject({
+      id: "doc-1",
+      version: "13"
+    });
+    expect(attempts).toBe(3);
+    expect(sleepCalls).toEqual([5, 10]);
+  });
+
+  it("does not retry permanent Google API failures", async () => {
+    let attempts = 0;
+    const client = new DriveClient(
+      async () => {
+        attempts += 1;
+        return mockResponse("forbidden", { status: 403 });
+      },
+      1_000,
+      [5, 10],
+      async () => undefined
+    );
+
+    await expect(client.getFileMetadata("token", { fileId: "doc-1" })).rejects.toBeInstanceOf(PickerGrantRequiredError);
+    expect(attempts).toBe(1);
+  });
 });

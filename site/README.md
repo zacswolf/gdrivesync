@@ -2,11 +2,11 @@
 
 This folder contains the static site assets for Cloudflare Pages.
 
-Deploy [public](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public) to your public GDriveSync site origin.
+Deploy [public](public) to your public GDriveSync site origin.
 
 Before deploy:
 
-1. Leave [site-config.js](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public/site-config.js) as a placeholder in git
+1. Leave [site-config.js](public/site-config.js) as a placeholder in git
 2. Set the real `GDRIVESYNC_PICKER_API_KEY` GitHub secret used by the Pages deploy workflow
 3. Confirm the Google web OAuth client includes the Cloudflare Pages production origin
 4. Confirm the consent screen homepage and privacy links point at the deployed site

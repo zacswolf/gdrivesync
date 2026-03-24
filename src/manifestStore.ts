@@ -1,10 +1,13 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import * as vscode from "vscode";
 
 import { parseManifestText } from "./manifestSchema";
+import { ManifestBusyError } from "./stateErrors";
 import { LinkedFileContext, LinkedFileEntry, SyncManifest } from "./types";
+import { writeFileAtomically } from "./utils/atomicWrite";
+import { FileLockTimeoutError, withFileLock } from "./utils/fileLock";
 import { fromManifestKey, toManifestKey } from "./utils/paths";
 
 const MANIFEST_FILE_NAME = ".gdrivesync.json";
@@ -18,6 +21,39 @@ function sortManifest(manifest: SyncManifest): SyncManifest {
 }
 
 export class ManifestStore {
+  private findLinkedFileContext(
+    folder: vscode.WorkspaceFolder,
+    manifest: SyncManifest,
+    fileUri: vscode.Uri
+  ): LinkedFileContext | undefined {
+    const candidateKey = toManifestKey(folder.uri.fsPath, fileUri.fsPath);
+    const exactEntry = manifest.files[candidateKey];
+    if (exactEntry) {
+      return this.buildContext(folder, candidateKey, candidateKey, "primary", exactEntry);
+    }
+
+    for (const [entryKey, entry] of Object.entries(manifest.files)) {
+      if (this.matchesGeneratedOutput(entry, candidateKey)) {
+        return this.buildContext(folder, entryKey, candidateKey, "generated", entry);
+      }
+    }
+
+    return undefined;
+  }
+
+  private async withManifestLock<T>(folderPath: string, task: () => Promise<T>): Promise<T> {
+    const manifestPath = this.getManifestPath(folderPath);
+    try {
+      return await withFileLock(manifestPath, "extension", task);
+    } catch (error) {
+      if (error instanceof FileLockTimeoutError) {
+        throw new ManifestBusyError(manifestPath);
+      }
+
+      throw error;
+    }
+  }
+
   private buildContext(
     folder: vscode.WorkspaceFolder,
     entryKey: string,
@@ -58,8 +94,15 @@ export class ManifestStore {
   }
 
   async writeManifest(folderPath: string, manifest: SyncManifest): Promise<void> {
-    await mkdir(folderPath, { recursive: true });
-    await writeFile(this.getManifestPath(folderPath), `${JSON.stringify(sortManifest(manifest), null, 2)}\n`, "utf8");
+    await this.withManifestLock(folderPath, async () => {
+      await this.writeManifestUnlocked(folderPath, manifest);
+    });
+  }
+
+  private async writeManifestUnlocked(folderPath: string, manifest: SyncManifest): Promise<void> {
+    await writeFileAtomically(this.getManifestPath(folderPath), `${JSON.stringify(sortManifest(manifest), null, 2)}\n`, {
+      encoding: "utf8"
+    });
   }
 
   async getLinkedFile(fileUri: vscode.Uri): Promise<LinkedFileContext | undefined> {
@@ -69,19 +112,7 @@ export class ManifestStore {
     }
 
     const manifest = await this.readManifest(folder.uri.fsPath);
-    const candidateKey = toManifestKey(folder.uri.fsPath, fileUri.fsPath);
-    const exactEntry = manifest.files[candidateKey];
-    if (exactEntry) {
-      return this.buildContext(folder, candidateKey, candidateKey, "primary", exactEntry);
-    }
-
-    for (const [entryKey, entry] of Object.entries(manifest.files)) {
-      if (this.matchesGeneratedOutput(entry, candidateKey)) {
-        return this.buildContext(folder, entryKey, candidateKey, "generated", entry);
-      }
-    }
-
-    return undefined;
+    return this.findLinkedFileContext(folder, manifest, fileUri);
   }
 
   async linkFile(fileUri: vscode.Uri, entry: LinkedFileEntry): Promise<LinkedFileContext> {
@@ -90,39 +121,55 @@ export class ManifestStore {
       throw new Error("Linking requires the local file to live inside an open workspace folder.");
     }
 
-    const manifest = await this.readManifest(folder.uri.fsPath);
-    const key = toManifestKey(folder.uri.fsPath, fileUri.fsPath);
-    manifest.files[key] = entry;
-    await this.writeManifest(folder.uri.fsPath, manifest);
-    return this.buildContext(folder, key, key, "primary", entry);
+    return this.withManifestLock(folder.uri.fsPath, async () => {
+      const manifest = await this.readManifest(folder.uri.fsPath);
+      const key = toManifestKey(folder.uri.fsPath, fileUri.fsPath);
+      manifest.files[key] = entry;
+      await this.writeManifestUnlocked(folder.uri.fsPath, manifest);
+      return this.buildContext(folder, key, key, "primary", entry);
+    });
   }
 
   async updateLinkedFile(fileUri: vscode.Uri, updater: (entry: LinkedFileEntry) => LinkedFileEntry): Promise<LinkedFileContext> {
-    const context = await this.getLinkedFile(fileUri);
-    if (!context) {
+    const folder = vscode.workspace.getWorkspaceFolder(fileUri);
+    if (!folder) {
       throw new Error("This file is not linked to Google.");
     }
 
-    const manifest = await this.readManifest(context.folderPath);
-    const nextEntry = updater(context.entry);
-    manifest.files[context.key] = nextEntry;
-    await this.writeManifest(context.folderPath, manifest);
-    return {
-      ...context,
-      entry: nextEntry
-    };
+    return this.withManifestLock(folder.uri.fsPath, async () => {
+      const manifest = await this.readManifest(folder.uri.fsPath);
+      const context = this.findLinkedFileContext(folder, manifest, fileUri);
+      if (!context) {
+        throw new Error("This file is not linked to Google.");
+      }
+
+      const nextEntry = updater(context.entry);
+      manifest.files[context.key] = nextEntry;
+      await this.writeManifestUnlocked(folder.uri.fsPath, manifest);
+      return {
+        ...context,
+        entry: nextEntry
+      };
+    });
   }
 
   async unlinkFile(fileUri: vscode.Uri): Promise<boolean> {
-    const context = await this.getLinkedFile(fileUri);
-    if (!context) {
+    const folder = vscode.workspace.getWorkspaceFolder(fileUri);
+    if (!folder) {
       return false;
     }
 
-    const manifest = await this.readManifest(context.folderPath);
-    delete manifest.files[context.key];
-    await this.writeManifest(context.folderPath, manifest);
-    return true;
+    return this.withManifestLock(folder.uri.fsPath, async () => {
+      const manifest = await this.readManifest(folder.uri.fsPath);
+      const context = this.findLinkedFileContext(folder, manifest, fileUri);
+      if (!context) {
+        return false;
+      }
+
+      delete manifest.files[context.key];
+      await this.writeManifestUnlocked(folder.uri.fsPath, manifest);
+      return true;
+    });
   }
 
   async listLinkedFiles(): Promise<Array<{ fileUri: vscode.Uri; context: LinkedFileContext }>> {

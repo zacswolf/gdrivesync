@@ -25,6 +25,7 @@ import {
 import { sha256Bytes, sha256Text } from "./utils/hash";
 import { fromManifestKey } from "./utils/paths";
 import { containsEmbeddedImageData, extractMarkdownAssets } from "./utils/markdownAssets";
+import { runWithConcurrency } from "./utils/runWithConcurrency";
 import { buildSpreadsheetSyncSummary } from "./utils/spreadsheetSyncSummary";
 import { parseWorkbookToCsvOutput } from "./workbookCsv";
 
@@ -58,9 +59,12 @@ interface SyncManagerOptions {
   }) => Promise<void>;
 }
 
+const SYNC_ALL_CONCURRENCY = 3;
+
 export class SyncManager {
   private readonly inFlightSyncs = new Map<string, Promise<SyncOutcome>>();
   private readonly openDebounce = new Map<string, NodeJS.Timeout>();
+  private disposed = false;
 
   constructor(
     private readonly authManager: GoogleAuthManager,
@@ -137,6 +141,9 @@ export class SyncManager {
     if (activeSync) {
       return activeSync;
     }
+    if (this.disposed) {
+      throw new Error("GDriveSync is shutting down and cannot start a new sync.");
+    }
 
     const syncTask = this.doSyncFile(linkedFile, options).finally(() => {
       this.inFlightSyncs.delete(syncKey);
@@ -152,37 +159,46 @@ export class SyncManager {
     cancelledCount: number;
   }> {
     const linkedFiles = await this.manifestStore.listLinkedFiles();
-    const results: Array<{ file: string; outcome: SyncOutcome }> = [];
+    const results = await runWithConcurrency(
+      linkedFiles.map((linkedFile, index) => ({ linkedFile, index })),
+      SYNC_ALL_CONCURRENCY,
+      async ({ linkedFile, index }) => {
+        const baseTargetUri = this.getBaseTargetUri(linkedFile.context);
+        const scopedProgress = options?.progress
+          ? {
+              report: (message: string) =>
+                options.progress?.report(`${index + 1}/${linkedFiles.length}: ${path.basename(baseTargetUri.fsPath)} — ${message}`)
+            }
+          : undefined;
+        const outcome = await this.syncFile(linkedFile.fileUri, { reason: "manual", progress: scopedProgress });
+        return {
+          file: linkedFile.fileUri.fsPath,
+          outcome
+        };
+      }
+    );
+
     let syncedCount = 0;
     let skippedCount = 0;
     let cancelledCount = 0;
-    for (const [index, linkedFile] of linkedFiles.entries()) {
-      const baseTargetUri = this.getBaseTargetUri(linkedFile.context);
-      const scopedProgress = options?.progress
-        ? {
-            report: (message: string) =>
-              options.progress?.report(`${index + 1}/${linkedFiles.length}: ${path.basename(baseTargetUri.fsPath)} — ${message}`)
-          }
-        : undefined;
-      const outcome = await this.syncFile(linkedFile.fileUri, { reason: "manual", progress: scopedProgress });
-      if (outcome.status === "synced") {
+    for (const result of results) {
+      if (result.outcome.status === "synced") {
         syncedCount += 1;
-      } else if (outcome.status === "skipped") {
+      } else if (result.outcome.status === "skipped") {
         skippedCount += 1;
-      } else if (outcome.status === "cancelled") {
+      } else if (result.outcome.status === "cancelled") {
         cancelledCount += 1;
       }
-
-      results.push({
-        file: linkedFile.fileUri.fsPath,
-        outcome
-      });
     }
 
     return { results, syncedCount, skippedCount, cancelledCount };
   }
 
   scheduleSyncOnOpen(fileUri: vscode.Uri): void {
+    if (this.disposed) {
+      return;
+    }
+
     const key = fileUri.toString();
     const existingHandle = this.openDebounce.get(key);
     if (existingHandle) {
@@ -191,6 +207,9 @@ export class SyncManager {
 
     const handle = setTimeout(async () => {
       this.openDebounce.delete(key);
+      if (this.disposed) {
+        return;
+      }
       const context = await this.manifestStore.getLinkedFile(fileUri);
       if (!context?.entry.syncOnOpen) {
         return;
@@ -198,15 +217,29 @@ export class SyncManager {
 
       try {
         const outcome = await this.syncFile(fileUri, { reason: "open" });
-        if (outcome.status === "synced") {
+        if (outcome.status === "synced" && !this.disposed) {
           void vscode.window.setStatusBarMessage(`Synced ${path.basename(fileUri.fsPath)} from Google`, 3500);
         }
       } catch (error) {
-        void vscode.window.showErrorMessage(this.toErrorMessage(error));
+        if (!this.disposed) {
+          void vscode.window.showErrorMessage(this.toErrorMessage(error));
+        }
       }
     }, 600);
 
     this.openDebounce.set(key, handle);
+  }
+
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+
+    this.disposed = true;
+    for (const handle of this.openDebounce.values()) {
+      clearTimeout(handle);
+    }
+    this.openDebounce.clear();
   }
 
   private async doSyncFile(
@@ -317,7 +350,7 @@ export class SyncManager {
       lastSyncedAt: new Date().toISOString()
     }));
 
-    if (options?.reason === "manual" || options?.reason === "link") {
+    if (!this.disposed && (options?.reason === "manual" || options?.reason === "link")) {
       void vscode.window.setStatusBarMessage(`Synced ${path.basename(baseTargetUri.fsPath)} from Google`, 4000);
     }
 
@@ -457,14 +490,16 @@ export class SyncManager {
     for (const failureMessage of enrichedResult.stats.failureMessages) {
       this.logger?.info(`Image enrichment warning: ${failureMessage}`);
     }
-    await this.options?.handleImageEnrichmentOutcome?.({
-      reason,
-      mode: settings.mode,
-      providerLabel: enrichedResult.stats.providerLabel,
-      cloudProvider: enrichedResult.stats.cloudProvider,
-      failureMessages: enrichedResult.stats.failureMessages,
-      enrichedImageCount: enrichedResult.stats.enrichedImageCount
-    });
+    if (!this.disposed) {
+      await this.options?.handleImageEnrichmentOutcome?.({
+        reason,
+        mode: settings.mode,
+        providerLabel: enrichedResult.stats.providerLabel,
+        cloudProvider: enrichedResult.stats.cloudProvider,
+        failureMessages: enrichedResult.stats.failureMessages,
+        enrichedImageCount: enrichedResult.stats.enrichedImageCount
+      });
+    }
     return {
       markdown: enrichedResult.markdown,
       assets: preparedContent.assets,
@@ -656,7 +691,7 @@ export class SyncManager {
       lastSyncedAt: new Date().toISOString()
     }));
 
-    if (options?.reason === "manual" || options?.reason === "link") {
+    if (!this.disposed && (options?.reason === "manual" || options?.reason === "link")) {
       void vscode.window.setStatusBarMessage(syncSummary, 5000);
     }
 

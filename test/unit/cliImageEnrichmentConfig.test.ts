@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -89,5 +89,13 @@ describe("CliImageEnrichmentConfigStore", () => {
         store: "alt-plus-comment"
       }
     });
+  });
+
+  it("does not leave temporary files behind after write", async () => {
+    const store = new CliImageEnrichmentConfigStore(configPath);
+    await store.write(DEFAULT_CLI_IMAGE_ENRICHMENT_DEFAULTS);
+
+    const siblings = await readdir(tempDirectory);
+    expect(siblings.filter((name) => name.includes(".tmp"))).toEqual([]);
   });
 });

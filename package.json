@@ -5,10 +5,18 @@
   "version": "0.1.0",
   "publisher": "zacswolf",
   "license": "MIT",
-  "private": true,
   "engines": {
-    "vscode": "^1.90.0"
+    "vscode": "^1.105.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zacswolf/gdrivesync.git"
+  },
+  "homepage": "https://github.com/zacswolf/gdrivesync#readme",
+  "bugs": {
+    "url": "https://github.com/zacswolf/gdrivesync/issues"
+  },
+  "icon": "resources/icon.png",
   "extensionKind": [
     "ui"
   ],
@@ -34,14 +42,6 @@
   "bin": {
     "gdrivesync": "./dist/cli.js"
   },
-  "files": [
-    "dist",
-    "resources",
-    "site",
-    "README.md",
-    "CHANGELOG.md",
-    "LICENSE"
-  ],
   "activationEvents": [
     "onStartupFinished",
     "onCommand:gdocSync.connectGoogleAccount",
@@ -302,13 +302,15 @@
     "test:cli": "vitest run test/integration",
     "pretest:extension": "npm run compile",
     "test:extension": "node ./dist/test/runTest.js",
-    "cli": "tsx src/cli.ts"
+    "cli": "cross-env GDRIVESYNC_LOAD_DEV_ENV=1 tsx src/cli.ts"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "^25.5.0",
-    "@types/vscode": "^1.110.0",
+    "@types/turndown": "^5.0.6",
+    "@types/vscode": "1.105.0",
     "@vscode/test-electron": "^2.5.2",
+    "cross-env": "^10.1.0",
     "mocha": "^11.7.5",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
@@ -316,7 +318,6 @@
   },
   "dependencies": {
     "@napi-rs/keyring": "^1.2.0",
-    "@types/turndown": "^5.0.6",
     "fast-xml-parser": "^5.5.9",
     "jszip": "^3.10.1",
     "mammoth": "^1.12.0",
