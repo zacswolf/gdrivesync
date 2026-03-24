@@ -12,7 +12,7 @@ import { convertPresentationToMarp } from "./presentationConverter";
 import { convertSlidesApiPresentationToMarp } from "./slidesApiPresentationConverter";
 import { SlidesClient } from "./slidesClient";
 import { getSyncProfile, SyncProfile } from "./syncProfiles";
-import { ImageEnrichmentService, ImageEnrichmentSettings, shouldPromptForImageEnrichment } from "./imageEnrichment";
+import { ImageEnrichmentCloudProvider, ImageEnrichmentService, ImageEnrichmentSettings, shouldPromptForImageEnrichment } from "./imageEnrichment";
 import {
   ConnectedGoogleAccount,
   GeneratedFilePayload,
@@ -46,6 +46,18 @@ interface SyncFileOptions {
   progress?: SyncProgressReporter;
 }
 
+interface SyncManagerOptions {
+  confirmCloudConsent?: (provider: ImageEnrichmentCloudProvider) => Promise<boolean>;
+  handleImageEnrichmentOutcome?: (details: {
+    reason?: SyncFileOptions["reason"];
+    mode: ImageEnrichmentSettings["mode"];
+    providerLabel?: string;
+    cloudProvider?: ImageEnrichmentCloudProvider;
+    failureMessages: string[];
+    enrichedImageCount: number;
+  }) => Promise<void>;
+}
+
 export class SyncManager {
   private readonly inFlightSyncs = new Map<string, Promise<SyncOutcome>>();
   private readonly openDebounce = new Map<string, NodeJS.Timeout>();
@@ -56,7 +68,8 @@ export class SyncManager {
     private readonly manifestStore: ManifestStore,
     private readonly slidesClient: SlidesClient,
     private readonly imageEnrichmentService: ImageEnrichmentService,
-    private readonly logger?: SyncLogger
+    private readonly logger?: SyncLogger,
+    private readonly options?: SyncManagerOptions
   ) {}
 
   async linkFile(fileUri: vscode.Uri, selection: PickerSelection, options?: { progress?: SyncProgressReporter }): Promise<SyncOutcome> {
@@ -220,7 +233,7 @@ export class SyncManager {
       !needsAssetMigration &&
       !trackedAssetsNeedRepair
     ) {
-      const localEnrichmentOutcome = await this.maybeRefreshLocalImageEnrichment(
+      const localEnrichmentOutcome = await this.maybeRefreshImageEnrichment(
         baseTargetUri,
         linkedFile,
         profile,
@@ -235,7 +248,7 @@ export class SyncManager {
       }
 
       this.logger?.info(
-        `Skipped ${path.basename(baseTargetUri.fsPath)} because the Google version is unchanged and no local image enrichment work was needed.`
+        `Skipped ${path.basename(baseTargetUri.fsPath)} because the Google version is unchanged and no image enrichment refresh work was needed.`
       );
       return {
         status: "skipped",
@@ -322,11 +335,14 @@ export class SyncManager {
     const settings = {
       mode: config.get<ImageEnrichmentSettings["mode"]>("imageEnrichment.mode", "prompt"),
       provider: config.get<ImageEnrichmentSettings["provider"]>("imageEnrichment.provider", "auto"),
+      cloudProvider: config.get<ImageEnrichmentSettings["cloudProvider"]>("imageEnrichment.cloudProvider", "openai"),
+      cloudModel: config.get<string>("imageEnrichment.cloudModel")?.trim() || undefined,
+      maxImagesPerRun: Math.max(1, config.get<number>("imageEnrichment.maxImagesPerRun", 25)),
       store: config.get<ImageEnrichmentSettings["store"]>("imageEnrichment.store", "alt-plus-comment"),
       onlyWhenAltGeneric: config.get<boolean>("imageEnrichment.onlyWhenAltGeneric", true)
     };
     this.logger?.info(
-      `Image enrichment settings: mode=${settings.mode}, provider=${settings.provider}, store=${settings.store}, onlyWhenAltGeneric=${settings.onlyWhenAltGeneric}.`
+      `Image enrichment settings: mode=${settings.mode}, provider=${settings.provider}, cloudProvider=${settings.cloudProvider}, cloudModel=${settings.cloudModel || "default"}, maxImagesPerRun=${settings.maxImagesPerRun}, store=${settings.store}, onlyWhenAltGeneric=${settings.onlyWhenAltGeneric}.`
     );
     return settings;
   }
@@ -337,6 +353,20 @@ export class SyncManager {
   ): Promise<ImageEnrichmentSettings> {
     const settings = this.getImageEnrichmentSettings();
     if (settings.mode !== "prompt") {
+      if ((settings.mode === "cloud" || settings.mode === "hybrid") && this.options?.confirmCloudConsent) {
+        const consentGranted = await this.options.confirmCloudConsent(settings.cloudProvider);
+        if (!consentGranted) {
+          const fallbackMode = settings.mode === "hybrid" ? "local" : "off";
+          this.logger?.info(
+            `Cloud image enrichment with ${settings.cloudProvider} was blocked by user consent settings. Falling back to ${fallbackMode}.`
+          );
+          return {
+            ...settings,
+            mode: fallbackMode
+          };
+        }
+      }
+
       this.logger?.info(`Image enrichment prompt skipped because mode is ${settings.mode}.`);
       return settings;
     }
@@ -393,9 +423,17 @@ export class SyncManager {
     preparedContent: { markdown: string; assets: GeneratedFilePayload[] },
     reason: SyncFileOptions["reason"],
     progress?: SyncProgressReporter
-  ): Promise<{ markdown: string; assets: GeneratedFilePayload[]; stats?: { enrichedImageCount: number; provider?: string } }> {
+  ): Promise<{
+    markdown: string;
+    assets: GeneratedFilePayload[];
+    stats?: {
+      enrichedImageCount: number;
+      providerLabel?: string;
+      failureMessages?: string[];
+    };
+  }> {
     const settings = await this.resolveImageEnrichmentSettingsForRun(preparedContent, reason);
-    if (settings.mode !== "local") {
+    if (settings.mode === "off" || settings.mode === "prompt") {
       this.logger?.info("Image enrichment did not run because mode resolved to off for this sync.");
       return {
         ...preparedContent
@@ -408,21 +446,32 @@ export class SyncManager {
       settings,
       progress
     );
-    if (!enrichedResult.stats.provider) {
-      this.logger?.info(
-        `Image enrichment found ${enrichedResult.stats.eligibleImageCount} eligible image${enrichedResult.stats.eligibleImageCount === 1 ? "" : "s"} but no local OCR provider was available.`
-      );
-    } else {
-      this.logger?.info(
-        `Image enrichment used ${enrichedResult.stats.provider}: eligible=${enrichedResult.stats.eligibleImageCount}, processed=${enrichedResult.stats.processedImageCount}, enriched=${enrichedResult.stats.enrichedImageCount}, cacheHits=${enrichedResult.stats.cacheHitCount}.`
-      );
+    const providerLabel = enrichedResult.stats.providerLabel || (enrichedResult.stats.provider ? enrichedResult.stats.provider : "none");
+    const cloudDetails =
+      enrichedResult.stats.cloudProvider
+        ? `, cloudProvider=${enrichedResult.stats.cloudProvider}, cloudModel=${enrichedResult.stats.cloudModel || "default"}, cloudKeySource=${enrichedResult.stats.cloudKeySource || "missing"}, cloudSent=${enrichedResult.stats.cloudSentCount}`
+        : "";
+    this.logger?.info(
+      `Image enrichment completed: mode=${settings.mode}, provider=${providerLabel}, eligible=${enrichedResult.stats.eligibleImageCount}, genericEligible=${enrichedResult.stats.genericCandidateCount}, upgradeEligible=${enrichedResult.stats.upgradeCandidateCount}, processed=${enrichedResult.stats.processedImageCount}, enriched=${enrichedResult.stats.enrichedImageCount}, cacheHits=${enrichedResult.stats.cacheHitCount}, skipped=${enrichedResult.stats.skippedImageCount}${cloudDetails}, failures=${enrichedResult.stats.failureMessages.length}.`
+    );
+    for (const failureMessage of enrichedResult.stats.failureMessages) {
+      this.logger?.info(`Image enrichment warning: ${failureMessage}`);
     }
+    await this.options?.handleImageEnrichmentOutcome?.({
+      reason,
+      mode: settings.mode,
+      providerLabel: enrichedResult.stats.providerLabel,
+      cloudProvider: enrichedResult.stats.cloudProvider,
+      failureMessages: enrichedResult.stats.failureMessages,
+      enrichedImageCount: enrichedResult.stats.enrichedImageCount
+    });
     return {
       markdown: enrichedResult.markdown,
       assets: preparedContent.assets,
       stats: {
         enrichedImageCount: enrichedResult.stats.enrichedImageCount,
-        provider: enrichedResult.stats.provider
+        providerLabel: enrichedResult.stats.providerLabel,
+        failureMessages: enrichedResult.stats.failureMessages
       }
     };
   }
@@ -431,18 +480,24 @@ export class SyncManager {
     fileName: string,
     enrichmentStats?: {
       enrichedImageCount: number;
-      provider?: string;
+      providerLabel?: string;
+      failureMessages?: string[];
     }
   ): string {
+    const warningLabel =
+      enrichmentStats?.failureMessages && enrichmentStats.failureMessages.length > 0
+        ? " Some images could not be enriched."
+        : "";
+
     if (!enrichmentStats?.enrichedImageCount) {
-      return `Synced ${fileName}.`;
+      return `Synced ${fileName}.${warningLabel}`;
     }
 
-    const providerLabel = enrichmentStats.provider ? ` using ${enrichmentStats.provider}` : "";
-    return `Synced ${fileName} and enriched ${enrichmentStats.enrichedImageCount} image${enrichmentStats.enrichedImageCount === 1 ? "" : "s"}${providerLabel}.`;
+    const providerLabel = enrichmentStats.providerLabel ? ` using ${enrichmentStats.providerLabel}` : "";
+    return `Synced ${fileName} and enriched ${enrichmentStats.enrichedImageCount} image${enrichmentStats.enrichedImageCount === 1 ? "" : "s"}${providerLabel}.${warningLabel}`;
   }
 
-  private async maybeRefreshLocalImageEnrichment(
+  private async maybeRefreshImageEnrichment(
     baseTargetUri: vscode.Uri,
     linkedFile: LinkedFileContext,
     profile: SyncProfile,
@@ -502,7 +557,7 @@ export class SyncManager {
     }));
 
     this.logger?.info(
-      `Applied local image enrichment refresh to ${path.basename(baseTargetUri.fsPath)} without downloading new Google content.`
+      `Applied image enrichment refresh to ${path.basename(baseTargetUri.fsPath)} without downloading new Google content.`
     );
     return {
       status: "synced",

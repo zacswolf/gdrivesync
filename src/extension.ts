@@ -2,11 +2,13 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { CloudImageProvider, formatCloudProviderLabel, resolveCloudModel } from "./cloudImageProviders";
 import { DriveClient, PickerGrantRequiredError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ImageEnrichmentService } from "./imageEnrichment";
 import { ManifestStore } from "./manifestStore";
 import { PickerClient } from "./pickerClient";
+import { SecretStorageCloudProviderKeyStore, formatCloudCredentialSource } from "./providerKeyStores";
 import { assertDesktopClientConfigured, loadDevelopmentEnv, resolveGoogleConfigFromValues } from "./runtimeConfig";
 import {
   getSupportedSourceMimeTypes,
@@ -49,6 +51,10 @@ function getTargetLocalFileUri(uri?: vscode.Uri): vscode.Uri {
 
 function sanitizeError(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+function getCloudConsentStateKey(provider: CloudImageProvider): string {
+  return `gdocSync.imageEnrichment.cloudConsent.${provider}`;
 }
 
 async function fileExists(uri: vscode.Uri): Promise<boolean> {
@@ -115,19 +121,108 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     resolveExtensionGoogleConfig,
     async (url) => vscode.env.openExternal(vscode.Uri.parse(url))
   );
+  const cloudProviderKeyStore = new SecretStorageCloudProviderKeyStore(context.secrets);
   const driveClient = new DriveClient();
   const pickerClient = new PickerClient(resolveExtensionGoogleConfig);
   const outputChannel = vscode.window.createOutputChannel("GDriveSync");
   context.subscriptions.push(outputChannel);
   const imageEnrichmentService = new ImageEnrichmentService(
     path.join(context.globalStorageUri.fsPath, "image-enrichment"),
-    path.join(context.extensionPath, "resources", "appleVisionOcr.swift")
+    path.join(context.extensionPath, "resources", "appleVisionOcr.swift"),
+    cloudProviderKeyStore
   );
-  const syncManager = new SyncManager(authManager, driveClient, manifestStore, new SlidesClient(), imageEnrichmentService, {
-    info(message: string) {
-      outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+  const syncManager = new SyncManager(
+    authManager,
+    driveClient,
+    manifestStore,
+    new SlidesClient(),
+    imageEnrichmentService,
+    {
+      info(message: string) {
+        outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+      }
+    },
+    {
+      confirmCloudConsent: async (provider) => {
+        const consentKey = getCloudConsentStateKey(provider);
+        const storedConsent = context.globalState.get<boolean | undefined>(consentKey);
+        if (storedConsent !== undefined) {
+          return storedConsent;
+        }
+
+        const providerLabel = formatCloudProviderLabel(provider);
+        const selection = await vscode.window.showWarningMessage(
+          `${providerLabel} image enrichment sends eligible images to ${providerLabel} for analysis. API charges may apply. Allow ${providerLabel} for future syncs?`,
+          { modal: true },
+          `Allow ${providerLabel}`,
+          "Keep local-only behavior"
+        );
+        const allowed = selection === `Allow ${providerLabel}`;
+        await context.globalState.update(consentKey, allowed);
+        return allowed;
+      },
+      handleImageEnrichmentOutcome: async (details) => {
+        if (details.reason === "open" || !details.cloudProvider || details.failureMessages.length === 0) {
+          return;
+        }
+
+        const providerLabel = formatCloudProviderLabel(details.cloudProvider);
+        const normalizedMessages = details.failureMessages.join(" ").toLowerCase();
+        const looksLikeAuthFailure =
+          normalizedMessages.includes("401") ||
+          normalizedMessages.includes("403") ||
+          normalizedMessages.includes("api key") ||
+          normalizedMessages.includes("authentication") ||
+          normalizedMessages.includes("unauthorized") ||
+          normalizedMessages.includes("forbidden");
+        if (!looksLikeAuthFailure) {
+          const selection = await vscode.window.showWarningMessage(
+            `${providerLabel} image enrichment had problems. Check the GDriveSync output channel for details.`,
+            "Open Output",
+            "Configure Image Enrichment"
+          );
+          if (selection === "Open Output") {
+            outputChannel.show(true);
+          } else if (selection === "Configure Image Enrichment") {
+            await vscode.commands.executeCommand("gdocSync.configureImageEnrichment");
+          }
+          return;
+        }
+
+        const alternativeProviders = (["openai", "anthropic"] as const)
+          .filter((provider) => provider !== details.cloudProvider);
+        const configuredAlternatives: CloudImageProvider[] = [];
+        for (const provider of alternativeProviders) {
+          const resolved = await imageEnrichmentService.resolveCloudApiKey(provider);
+          if (resolved.apiKey) {
+            configuredAlternatives.push(provider);
+          }
+        }
+
+        const alternative = configuredAlternatives[0];
+        const selection = await vscode.window.showWarningMessage(
+          `${providerLabel} image enrichment failed, likely because the configured credentials are no longer valid.`,
+          alternative ? `Switch to ${formatCloudProviderLabel(alternative)} default` : "Configure Image Enrichment",
+          "Open Output"
+        );
+        if (selection === "Open Output") {
+          outputChannel.show(true);
+          return;
+        }
+        if (alternative && selection === `Switch to ${formatCloudProviderLabel(alternative)} default`) {
+          await vscode.workspace
+            .getConfiguration("gdocSync")
+            .update("imageEnrichment.cloudProvider", alternative, vscode.ConfigurationTarget.Global);
+          logInfo(`Switched default cloud image enrichment provider to ${formatCloudProviderLabel(alternative)} after ${providerLabel} auth failure.`);
+          void vscode.window.showInformationMessage(
+            `Default cloud image enrichment provider is now ${formatCloudProviderLabel(alternative)}.`
+          );
+          return;
+        }
+        await vscode.commands.executeCommand("gdocSync.configureImageEnrichment");
+      }
     }
-  });
+  );
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const codeLensEmitter = new vscode.EventEmitter<void>();
 
@@ -282,6 +377,443 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       logInfo(`Picker will use ${formatAccountLabel(selection)}.`);
     }
     return typeof selection === "string" ? undefined : selection;
+  }
+
+  function getCloudModelOverride(): string | undefined {
+    return vscode.workspace.getConfiguration("gdocSync").get<string>("imageEnrichment.cloudModel")?.trim() || undefined;
+  }
+
+  function getConfiguredCloudModel(provider: CloudImageProvider): string {
+    return resolveCloudModel(provider, getCloudModelOverride());
+  }
+
+  function getCurrentImageEnrichmentMode(): "prompt" | "off" | "local" | "cloud" | "hybrid" {
+    return vscode.workspace.getConfiguration("gdocSync").get("imageEnrichment.mode", "prompt");
+  }
+
+  function getCurrentCloudProvider(): CloudImageProvider {
+    return vscode.workspace.getConfiguration("gdocSync").get("imageEnrichment.cloudProvider", "openai");
+  }
+
+  function formatImageEnrichmentMode(mode: string): string {
+    if (mode === "off") {
+      return "Off";
+    }
+    if (mode === "prompt") {
+      return "Prompt";
+    }
+    if (mode === "local") {
+      return "Local OCR";
+    }
+    if (mode === "cloud") {
+      return "Cloud AI";
+    }
+    if (mode === "hybrid") {
+      return "Hybrid";
+    }
+
+    return mode;
+  }
+
+  async function getCloudConsent(provider: CloudImageProvider): Promise<boolean | undefined> {
+    return context.globalState.get<boolean | undefined>(getCloudConsentStateKey(provider));
+  }
+
+  async function setCloudConsent(provider: CloudImageProvider, allowed: boolean): Promise<void> {
+    await context.globalState.update(getCloudConsentStateKey(provider), allowed);
+  }
+
+  async function ensureCloudConsent(provider: CloudImageProvider): Promise<boolean> {
+    const providerLabel = formatCloudProviderLabel(provider);
+    const existingConsent = await getCloudConsent(provider);
+    if (existingConsent === true) {
+      return true;
+    }
+
+    const selection = await vscode.window.showWarningMessage(
+      `${providerLabel} image enrichment sends eligible images directly to ${providerLabel}. API charges may apply. Allow ${providerLabel}?`,
+      { modal: true },
+      `Allow ${providerLabel}`,
+      "Keep current behavior"
+    );
+    const allowed = selection === `Allow ${providerLabel}`;
+    await setCloudConsent(provider, allowed);
+    return allowed;
+  }
+
+  async function getConfiguredCloudProviders(): Promise<CloudImageProvider[]> {
+    const providers: CloudImageProvider[] = [];
+    for (const provider of ["openai", "anthropic"] as const) {
+      const resolved = await imageEnrichmentService.resolveCloudApiKey(provider);
+      if (resolved.apiKey) {
+        providers.push(provider);
+      }
+    }
+
+    return providers;
+  }
+
+  async function maybePromptToUseCloud(provider: CloudImageProvider): Promise<boolean> {
+    const currentMode = getCurrentImageEnrichmentMode();
+    if (currentMode === "cloud") {
+      return false;
+    }
+
+    const providerLabel = formatCloudProviderLabel(provider);
+    const selection = await vscode.window.showInformationMessage(
+      `${providerLabel} is now configured. Switch image enrichment to cloud mode, or keep the current mode (${formatImageEnrichmentMode(currentMode)})?`,
+      "Switch to cloud",
+      `Keep current mode (${formatImageEnrichmentMode(currentMode)})`
+    );
+    if (selection !== "Switch to cloud") {
+      return false;
+    }
+
+    const consentGranted = await ensureCloudConsent(provider);
+    if (!consentGranted) {
+      logInfo(`Cloud image enrichment with ${providerLabel} remained disabled because consent was not granted.`);
+      return false;
+    }
+
+    await vscode.workspace.getConfiguration("gdocSync").update("imageEnrichment.cloudProvider", provider, vscode.ConfigurationTarget.Global);
+    await vscode.workspace.getConfiguration("gdocSync").update("imageEnrichment.mode", "cloud", vscode.ConfigurationTarget.Global);
+    logInfo(`Image enrichment mode switched to cloud with ${providerLabel}.`);
+    void vscode.window.showInformationMessage(`Image enrichment now uses cloud mode with ${providerLabel}.`);
+    return true;
+  }
+
+  async function activateCloudMode(provider: CloudImageProvider): Promise<boolean> {
+    const providerLabel = formatCloudProviderLabel(provider);
+    const currentMode = getCurrentImageEnrichmentMode();
+
+    const consentGranted = await ensureCloudConsent(provider);
+    if (!consentGranted) {
+      logInfo(`Cloud image enrichment with ${providerLabel} remained disabled because consent was not granted.`);
+      return false;
+    }
+
+    await vscode.workspace.getConfiguration("gdocSync").update("imageEnrichment.cloudProvider", provider, vscode.ConfigurationTarget.Global);
+    if (currentMode !== "cloud") {
+      await vscode.workspace.getConfiguration("gdocSync").update("imageEnrichment.mode", "cloud", vscode.ConfigurationTarget.Global);
+      logInfo(`Image enrichment mode switched to cloud with ${providerLabel}.`);
+      void vscode.window.showInformationMessage(`Image enrichment now uses cloud mode with ${providerLabel}.`);
+      return true;
+    }
+
+    logInfo(`Confirmed cloud image enrichment consent for ${providerLabel}.`);
+    return false;
+  }
+
+  async function maybePromptToSwitchCloudDefault(provider: CloudImageProvider): Promise<boolean> {
+    const configuredProviders = await getConfiguredCloudProviders();
+    if (configuredProviders.length < 2) {
+      return false;
+    }
+
+    const currentProvider = getCurrentCloudProvider();
+    if (currentProvider === provider) {
+      return false;
+    }
+
+    const currentLabel = formatCloudProviderLabel(currentProvider);
+    const nextLabel = formatCloudProviderLabel(provider);
+    const selection = await vscode.window.showInformationMessage(
+      `${nextLabel} is configured. Keep ${currentLabel} as the default cloud provider, or switch to ${nextLabel}?`,
+      `Keep ${currentLabel} default`,
+      `Switch to ${nextLabel} default`
+    );
+    if (selection !== `Switch to ${nextLabel} default`) {
+      return false;
+    }
+
+    await vscode.workspace.getConfiguration("gdocSync").update("imageEnrichment.cloudProvider", provider, vscode.ConfigurationTarget.Global);
+    logInfo(`Default cloud image enrichment provider switched to ${nextLabel}.`);
+    void vscode.window.showInformationMessage(`Default cloud image enrichment provider is now ${nextLabel}.`);
+    return true;
+  }
+
+  async function connectCloudApiKey(
+    provider: CloudImageProvider,
+    options?: { promptToUseCloud?: boolean }
+  ): Promise<boolean> {
+    await ensureTrustedWorkspace();
+    const providerLabel = formatCloudProviderLabel(provider);
+    const apiKey = await vscode.window.showInputBox({
+      title: `Connect ${providerLabel} API Key`,
+      prompt: `Paste your ${providerLabel} API key. It will be stored in VS Code SecretStorage on this machine.`,
+      password: true,
+      ignoreFocusOut: true
+    });
+    if (!apiKey?.trim()) {
+      logInfo(`${providerLabel} API key connect flow cancelled.`);
+      return false;
+    }
+
+    await cloudProviderKeyStore.set(provider, apiKey);
+    logInfo(`Stored ${providerLabel} API key in SecretStorage.`);
+    const shouldPromptToUseCloud = options?.promptToUseCloud ?? true;
+    if (!shouldPromptToUseCloud) {
+      return true;
+    }
+
+    const switchedToCloud = await maybePromptToUseCloud(provider);
+    if (!switchedToCloud) {
+      await maybePromptToSwitchCloudDefault(provider);
+      void vscode.window.showInformationMessage(`Stored ${providerLabel} API key in VS Code SecretStorage.`);
+    }
+    return true;
+  }
+
+  async function disconnectCloudApiKey(provider: CloudImageProvider): Promise<void> {
+    await ensureTrustedWorkspace();
+    const providerLabel = formatCloudProviderLabel(provider);
+    await cloudProviderKeyStore.delete(provider);
+    const remainingProviders = await getConfiguredCloudProviders();
+    if (getCurrentCloudProvider() === provider && remainingProviders.length > 0) {
+      const nextProvider = remainingProviders[0];
+      await vscode.workspace
+        .getConfiguration("gdocSync")
+        .update("imageEnrichment.cloudProvider", nextProvider, vscode.ConfigurationTarget.Global);
+      logInfo(`Default cloud image enrichment provider switched to ${formatCloudProviderLabel(nextProvider)} after removing ${providerLabel}.`);
+    }
+    logInfo(`Removed ${providerLabel} API key from SecretStorage.`);
+    void vscode.window.showInformationMessage(`Removed ${providerLabel} API key from VS Code SecretStorage.`);
+  }
+
+  async function testCloudProvider(provider: CloudImageProvider): Promise<void> {
+    await ensureTrustedWorkspace();
+    const providerLabel = formatCloudProviderLabel(provider);
+    const result = await imageEnrichmentService.testCloudProvider(provider, getCloudModelOverride());
+    logInfo(
+      `${providerLabel} provider test succeeded using ${result.model} from ${formatCloudCredentialSource(result.keySource)}.`
+    );
+    void vscode.window.showInformationMessage(
+      `${providerLabel} is configured and reachable using ${result.model} from ${formatCloudCredentialSource(result.keySource)}.`
+    );
+  }
+
+  async function configureLocalImageEnrichment(): Promise<void> {
+    await ensureTrustedWorkspace();
+    const capabilities = await imageEnrichmentService.inspectCapabilities();
+    const items: Array<vscode.QuickPickItem & { provider?: "auto" | "apple-vision" | "tesseract" }> = [];
+
+    if (capabilities.appleVision.available && capabilities.tesseract.available) {
+      items.push({
+        label: "Use Local OCR (Auto)",
+        detail: "Apple Vision preferred, Tesseract fallback",
+        provider: "auto"
+      });
+    }
+    if (capabilities.appleVision.available) {
+      items.push({
+        label: "Use Apple Vision",
+        detail: "Best local OCR quality on macOS",
+        provider: "apple-vision"
+      });
+    }
+    if (capabilities.tesseract.available) {
+      items.push({
+        label: "Use Tesseract",
+        detail: "Cross-platform local OCR",
+        provider: "tesseract"
+      });
+    }
+
+    if (items.length === 0) {
+      void vscode.window.showWarningMessage(
+        "No local OCR provider is currently available. Install Tesseract, or use a macOS setup with Apple Vision and the Swift compiler."
+      );
+      return;
+    }
+
+    const selection = await vscode.window.showQuickPick(items, {
+      placeHolder: "Choose the local OCR provider to use"
+    });
+    if (!selection?.provider) {
+      logInfo("Configure local image enrichment cancelled.");
+      return;
+    }
+
+    await vscode.workspace.getConfiguration("gdocSync").update("imageEnrichment.mode", "local", vscode.ConfigurationTarget.Global);
+    await vscode.workspace.getConfiguration("gdocSync").update("imageEnrichment.provider", selection.provider, vscode.ConfigurationTarget.Global);
+    logInfo(`Configured local image enrichment using ${selection.provider}.`);
+    void vscode.window.showInformationMessage(`Image enrichment now uses local OCR (${selection.provider}).`);
+  }
+
+  async function configureCloudImageEnrichment(): Promise<void> {
+    await ensureTrustedWorkspace();
+    const currentMode = getCurrentImageEnrichmentMode();
+    const currentProvider = getCurrentCloudProvider();
+    const selection = await vscode.window.showQuickPick(
+      [
+        {
+          label: "OpenAI",
+          detail: `Model ${getConfiguredCloudModel("openai")} • ${currentProvider === "openai" ? "current default" : "available"}`
+        },
+        {
+          label: "Anthropic",
+          detail: `Model ${getConfiguredCloudModel("anthropic")} • ${currentProvider === "anthropic" ? "current default" : "available"}`
+        }
+      ],
+      {
+        placeHolder: `Choose the cloud provider to use or configure (current mode: ${formatImageEnrichmentMode(currentMode)})`
+      }
+    );
+    if (!selection) {
+      logInfo("Configure cloud image enrichment cancelled.");
+      return;
+    }
+
+    const provider = selection.label === "OpenAI" ? "openai" : "anthropic";
+    const resolved = await imageEnrichmentService.resolveCloudApiKey(provider);
+    const providerLabel = formatCloudProviderLabel(provider);
+    const action = await vscode.window.showQuickPick(
+      resolved.apiKey
+        ? [
+            {
+              label: `Use ${providerLabel}`,
+              detail:
+                currentProvider === provider
+                  ? `Current default cloud provider • mode ${formatImageEnrichmentMode(currentMode)}`
+                  : `Configured via ${formatCloudCredentialSource(resolved.source)}`
+            },
+            {
+              label: `Reconnect ${providerLabel} API Key...`,
+              detail: "Replace the stored API key"
+            },
+            {
+              label: `Disconnect ${providerLabel} API Key`,
+              detail: "Remove the stored API key from SecretStorage"
+            },
+            {
+              label: `Test ${providerLabel}`,
+              detail: `Check the configured key with model ${getConfiguredCloudModel(provider)}`
+            }
+          ]
+        : [
+            {
+              label: `Configure ${providerLabel} API Key...`,
+              detail: "Store a provider key in SecretStorage"
+            }
+          ],
+      {
+        placeHolder: `Choose what to do with ${providerLabel}`
+      }
+    );
+    if (!action) {
+      logInfo(`Configure cloud image enrichment cancelled at ${providerLabel} action picker.`);
+      return;
+    }
+
+    if (action.label.startsWith("Configure ") || action.label.startsWith("Reconnect ")) {
+      const connected = await connectCloudApiKey(provider, { promptToUseCloud: false });
+      if (!connected) {
+        return;
+      }
+
+      if (getCurrentImageEnrichmentMode() !== "cloud") {
+        const switchedToCloud = await activateCloudMode(provider);
+        if (!switchedToCloud && getCurrentImageEnrichmentMode() !== "cloud") {
+          void vscode.window.showInformationMessage(
+            `${providerLabel} is configured, but image enrichment is still using ${formatImageEnrichmentMode(getCurrentImageEnrichmentMode())}.`
+          );
+        }
+        return;
+      }
+
+      if (getCurrentCloudProvider() !== provider) {
+        await maybePromptToSwitchCloudDefault(provider);
+      }
+
+      await ensureCloudConsent(provider);
+      return;
+    } else if (action.label.startsWith("Disconnect ")) {
+      await disconnectCloudApiKey(provider);
+      return;
+    } else if (action.label.startsWith("Test ")) {
+      await testCloudProvider(provider);
+      return;
+    } else {
+      const switchedToCloud = await activateCloudMode(provider);
+      if (!switchedToCloud && currentProvider !== provider) {
+        await maybePromptToSwitchCloudDefault(provider);
+      } else if (!switchedToCloud && currentProvider === provider && currentMode === "cloud") {
+        void vscode.window.showInformationMessage(`${providerLabel} is already the default cloud provider.`);
+      }
+    }
+
+    if (getCurrentImageEnrichmentMode() === "cloud" && getCurrentCloudProvider() === provider) {
+      await ensureCloudConsent(provider);
+    }
+  }
+
+  async function configureImageEnrichment(): Promise<void> {
+    await ensureTrustedWorkspace();
+    const currentMode = getCurrentImageEnrichmentMode();
+    const currentCloudProvider = getCurrentCloudProvider();
+    const configuredCloudProviders = await getConfiguredCloudProviders();
+    const localCapabilities = await imageEnrichmentService.inspectCapabilities();
+    const localSummary = localCapabilities.appleVision.available || localCapabilities.tesseract.available
+      ? [
+          localCapabilities.appleVision.available ? "Apple Vision" : undefined,
+          localCapabilities.tesseract.available ? "Tesseract" : undefined
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : "No local OCR provider available";
+    const cloudSummary = configuredCloudProviders.length > 0
+      ? `Configured: ${configuredCloudProviders.map((provider) => formatCloudProviderLabel(provider)).join(", ")}`
+      : "No cloud providers configured";
+
+    const selection = await vscode.window.showQuickPick(
+      [
+        {
+          label: "Use local OCR",
+          detail: `${localSummary} • current mode ${formatImageEnrichmentMode(currentMode)}`
+        },
+        {
+          label: "Use cloud AI",
+          detail: `${cloudSummary} • current default ${formatCloudProviderLabel(currentCloudProvider)}`
+        },
+        {
+          label: "Turn image enrichment off",
+          detail: `Current mode ${formatImageEnrichmentMode(currentMode)}`
+        },
+        ...(configuredCloudProviders.includes(currentCloudProvider)
+          ? [
+              {
+                label: `Test ${formatCloudProviderLabel(currentCloudProvider)}`,
+                detail: `Current default cloud provider • model ${getConfiguredCloudModel(currentCloudProvider)}`
+              }
+            ]
+          : [])
+      ],
+      {
+        placeHolder: "Configure image enrichment"
+      }
+    );
+    if (!selection) {
+      logInfo("Configure Image Enrichment dismissed.");
+      return;
+    }
+
+    if (selection.label === "Use local OCR") {
+      await configureLocalImageEnrichment();
+      return;
+    }
+    if (selection.label === "Use cloud AI") {
+      await configureCloudImageEnrichment();
+      return;
+    }
+    if (selection.label === "Turn image enrichment off") {
+      await vscode.workspace.getConfiguration("gdocSync").update("imageEnrichment.mode", "off", vscode.ConfigurationTarget.Global);
+      logInfo("Turned image enrichment off.");
+      void vscode.window.showInformationMessage("Image enrichment is now off.");
+      return;
+    }
+    if (selection.label.startsWith("Test ")) {
+      await testCloudProvider(currentCloudProvider);
+    }
   }
 
   async function buildAccessDeniedMessage(fileId: string, account?: ConnectedGoogleAccount): Promise<string> {
@@ -965,6 +1497,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
+    vscode.commands.registerCommand("gdocSync.configureImageEnrichment", async () => {
+      try {
+        await runLoggedCommand("gdocSync.configureImageEnrichment", configureImageEnrichment);
+      } catch (error) {
+        void vscode.window.showErrorMessage(sanitizeError(error));
+      }
+    }),
     vscode.commands.registerCommand("gdocSync.linkCurrentFile", async (uri?: vscode.Uri) => {
       try {
         await runLoggedCommand("gdocSync.linkCurrentFile", () => linkLocalFile(uri));
@@ -1024,6 +1563,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         event.affectsConfiguration("gdocSync.unlinkOnMarkdownDelete") ||
         event.affectsConfiguration("gdocSync.imageEnrichment.mode") ||
         event.affectsConfiguration("gdocSync.imageEnrichment.provider") ||
+        event.affectsConfiguration("gdocSync.imageEnrichment.cloudProvider") ||
+        event.affectsConfiguration("gdocSync.imageEnrichment.cloudModel") ||
+        event.affectsConfiguration("gdocSync.imageEnrichment.maxImagesPerRun") ||
         event.affectsConfiguration("gdocSync.imageEnrichment.store") ||
         event.affectsConfiguration("gdocSync.imageEnrichment.onlyWhenAltGeneric") ||
         event.affectsConfiguration("gdocSync.development.desktopClientId") ||

@@ -9,6 +9,9 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "extensionKind": [
+    "ui"
+  ],
   "categories": [
     "Other"
   ],
@@ -45,6 +48,7 @@
     "onCommand:gdocSync.disconnectGoogleAccount",
     "onCommand:gdocSync.switchDefaultGoogleAccount",
     "onCommand:gdocSync.googleAccounts",
+    "onCommand:gdocSync.configureImageEnrichment",
     "onCommand:gdocSync.linkCurrentFile",
     "onCommand:gdocSync.importGoogleDoc",
     "onCommand:gdocSync.syncCurrentFile",
@@ -72,6 +76,11 @@
       {
         "command": "gdocSync.googleAccounts",
         "title": "Google Accounts",
+        "category": "GDriveSync"
+      },
+      {
+        "command": "gdocSync.configureImageEnrichment",
+        "title": "Configure Image Enrichment...",
         "category": "GDriveSync"
       },
       {
@@ -160,6 +169,9 @@
           "command": "gdocSync.googleAccounts"
         },
         {
+          "command": "gdocSync.configureImageEnrichment"
+        },
+        {
           "command": "gdocSync.linkCurrentFile"
         },
         {
@@ -207,10 +219,12 @@
           "enum": [
             "prompt",
             "off",
-            "local"
+            "local",
+            "cloud",
+            "hybrid"
           ],
           "default": "prompt",
-          "description": "Control local OCR-based image enrichment for Markdown and Marp outputs. Prompt asks once when an eligible sync includes images with generic alt text."
+          "description": "Control image enrichment for Markdown and Marp outputs. Prompt asks once about local OCR; cloud and hybrid modes use explicitly configured AI providers."
         },
         "gdocSync.imageEnrichment.provider": {
           "type": "string",
@@ -221,6 +235,26 @@
           ],
           "default": "auto",
           "description": "Choose the preferred local OCR provider for image enrichment. Auto prefers Apple Vision on macOS and falls back to Tesseract when available."
+        },
+        "gdocSync.imageEnrichment.cloudProvider": {
+          "type": "string",
+          "enum": [
+            "openai",
+            "anthropic"
+          ],
+          "default": "openai",
+          "description": "Choose the cloud AI provider for image enrichment when mode is cloud or hybrid."
+        },
+        "gdocSync.imageEnrichment.cloudModel": {
+          "type": "string",
+          "default": "",
+          "description": "Optional override for the cloud image-enrichment model. Leave blank to use the provider default."
+        },
+        "gdocSync.imageEnrichment.maxImagesPerRun": {
+          "type": "number",
+          "minimum": 1,
+          "default": 25,
+          "description": "Maximum number of images to send to a cloud provider in a single sync or import run."
         },
         "gdocSync.imageEnrichment.store": {
           "type": "string",
@@ -279,6 +313,7 @@
     "vitest": "^4.1.1"
   },
   "dependencies": {
+    "@napi-rs/keyring": "^1.2.0",
     "@types/turndown": "^5.0.6",
     "fast-xml-parser": "^5.5.9",
     "jszip": "^3.10.1",

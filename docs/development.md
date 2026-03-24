@@ -22,6 +22,7 @@ cp .env.example .env
 - `GDRIVESYNC_DESKTOP_CLIENT_SECRET`
 - optionally `GDRIVESYNC_HOSTED_BASE_URL` if you are testing against your own hosted picker site
 - optionally `GDRIVESYNC_LOGIN_HINT` to reduce repeated account selection during development
+- optionally `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` if you want to test CLI cloud image enrichment without using keychain login
 
 The extension loads `.env` and `.env.local` from the repo root in development.
 
@@ -35,6 +36,8 @@ You can also set local overrides through VS Code user settings:
 Important distinction:
 - desktop sign-in uses the extension's localhost callback
 - `GDRIVESYNC_HOSTED_BASE_URL` is only for hosted picker flows and hosted link-share recovery
+- extension cloud provider keys are stored in VS Code `SecretStorage`, not in `.env`
+- CLI cloud provider keys can come from `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` or from `gdrivesync ai auth login <provider>`
 
 4. Build and test:
 

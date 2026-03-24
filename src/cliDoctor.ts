@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import path from "node:path";
 
+import { CliImageEnrichmentConfigStore, DEFAULT_CLI_IMAGE_ENRICHMENT_DEFAULTS, normalizeCliImageEnrichmentConfig } from "./cliImageEnrichmentConfig";
 import { CliManifestStore } from "./cliManifestStore";
 import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
@@ -62,8 +63,22 @@ export interface CliDoctorReport {
     scope: string;
   };
   imageEnrichment: {
-    mode: "off";
+    mode: "off" | "local" | "cloud";
     cacheRootPath: string;
+    config: {
+      path: string;
+      exists: boolean;
+      valid: boolean;
+      defaults?: {
+        mode: "off" | "local" | "cloud";
+        provider: "auto" | "apple-vision" | "tesseract";
+        cloudProvider: "openai" | "anthropic";
+        cloudModel?: string;
+        maxImagesPerRun: number;
+        store: "alt-plus-comment" | "alt-only";
+      };
+      backupPath?: string;
+    };
     appleVision: {
       available: boolean;
       compilerAvailable: boolean;
@@ -205,7 +220,8 @@ export async function runCliDoctor(
   authManager: GoogleAuthManager,
   driveClient: DriveClient,
   options: CliDoctorOptions = {},
-  imageEnrichmentService?: ImageEnrichmentService
+  imageEnrichmentService?: ImageEnrichmentService,
+  cliImageEnrichmentConfigStore?: CliImageEnrichmentConfigStore
 ): Promise<CliDoctorReport> {
   const config = resolveCliGoogleConfig();
   const issues: DoctorIssue[] = [];
@@ -240,6 +256,11 @@ export async function runCliDoctor(
     imageEnrichment: {
       mode: "off",
       cacheRootPath: "",
+      config: {
+        path: cliImageEnrichmentConfigStore?.getFilePath() || "",
+        exists: false,
+        valid: true
+      },
       appleVision: {
         available: false,
         compilerAvailable: false,
@@ -271,6 +292,11 @@ export async function runCliDoctor(
     report.imageEnrichment = {
       mode: "off",
       cacheRootPath: imageEnrichmentCapabilities.cacheRootPath,
+      config: {
+        path: cliImageEnrichmentConfigStore?.getFilePath() || "",
+        exists: false,
+        valid: true
+      },
       appleVision: imageEnrichmentCapabilities.appleVision,
       tesseract: imageEnrichmentCapabilities.tesseract
     };
@@ -289,6 +315,53 @@ export async function runCliDoctor(
         code: "IMAGE_ENRICHMENT_TESSERACT_NOT_FOUND",
         message: "Tesseract is not installed. Local image enrichment will rely on Apple Vision when available."
       });
+    }
+  }
+
+  if (cliImageEnrichmentConfigStore) {
+    const configPath = cliImageEnrichmentConfigStore.getFilePath();
+    report.imageEnrichment.config.path = configPath;
+    report.imageEnrichment.config.exists = await pathExists(configPath);
+    if (report.imageEnrichment.config.exists) {
+      try {
+        const rawConfig = await readFile(configPath, "utf8");
+        const parsedConfig = normalizeCliImageEnrichmentConfig(JSON.parse(rawConfig), configPath);
+        report.imageEnrichment.config.valid = true;
+        report.imageEnrichment.config.defaults = parsedConfig.imageEnrichment;
+        report.imageEnrichment.mode = parsedConfig.imageEnrichment.mode;
+      } catch (error) {
+        const normalizedError =
+          error instanceof SyntaxError ? new CorruptStateError("cli-config", configPath) : error;
+
+        if (!(normalizedError instanceof CorruptStateError)) {
+          throw normalizedError;
+        }
+
+        report.imageEnrichment.config.valid = false;
+        if (options.repair) {
+          const backupPath = await backupFile(configPath);
+          await cliImageEnrichmentConfigStore.write(DEFAULT_CLI_IMAGE_ENRICHMENT_DEFAULTS);
+          report.imageEnrichment.config.valid = true;
+          report.imageEnrichment.config.defaults = DEFAULT_CLI_IMAGE_ENRICHMENT_DEFAULTS;
+          report.imageEnrichment.config.backupPath = backupPath;
+          report.imageEnrichment.mode = "off";
+          issues.push({
+            severity: "warning",
+            code: "IMAGE_ENRICHMENT_CONFIG_CORRUPT",
+            message: `${normalizedError.message} The saved CLI image enrichment defaults were repaired from a backup.`,
+            path: configPath
+          });
+          actions.push(`Backed up the corrupt CLI image enrichment config to ${backupPath} and restored default image enrichment settings.`);
+          repairPerformed = true;
+        } else {
+          issues.push({
+            severity: "error",
+            code: "IMAGE_ENRICHMENT_CONFIG_CORRUPT",
+            message: normalizedError.message,
+            path: configPath
+          });
+        }
+      }
     }
   }
 
@@ -477,8 +550,14 @@ export function formatDoctorReport(report: CliDoctorReport): string {
         : "not signed in"
     }`,
     `Hosted picker: ${report.config.hostedBaseUrl || "not configured"}`,
-    `Image enrichment: ${report.imageEnrichment.mode} • Apple Vision ${report.imageEnrichment.appleVision.status} • Tesseract ${report.imageEnrichment.tesseract.available ? "available" : "not found"}`
+    `Image enrichment: ${report.imageEnrichment.mode} • Apple Vision ${report.imageEnrichment.appleVision.status} • Tesseract ${report.imageEnrichment.tesseract.available ? "available" : "not found"} • CLI config ${report.imageEnrichment.config.exists ? (report.imageEnrichment.config.valid ? "ok" : "corrupt") : "not configured"}`
   ];
+
+  if (report.imageEnrichment.config.defaults) {
+    lines.push(
+      `Image enrichment defaults: ${report.imageEnrichment.config.defaults.mode}${report.imageEnrichment.config.defaults.mode === "local" ? ` (${report.imageEnrichment.config.defaults.provider})` : report.imageEnrichment.config.defaults.mode === "cloud" ? ` (${report.imageEnrichment.config.defaults.cloudProvider})` : ""}`
+    );
+  }
 
   if (report.issues.length === 0) {
     lines.push("No issues found.");

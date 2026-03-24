@@ -42,12 +42,12 @@ Agent-friendly qualities:
 - Drive-hosted `.pptx` download and local Marp Markdown generation
 - Google Sheets export to `.xlsx` and local `.csv` generation
 - Drive-hosted `.xlsx` download and local `.csv` generation
-- Optional local image enrichment for Markdown and Marp outputs using Apple Vision on macOS or Tesseract when available
+- Optional local or cloud image enrichment for Markdown and Marp outputs
 - Workspace sidecar manifest in `.gdrivesync.json`
 - Commands for connecting accounts, switching the default account, linking, importing, syncing, auto-sync toggle, unlinking, and disconnecting accounts
 - Progress notifications for manual import and sync flows in the VS Code extension
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
-- Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
+- Static site assets for Cloudflare Pages, including homepage, privacy policy, and Picker page
 - Agent-friendly CLI entrypoint with auth, inspect, export, link, status, sync, and unlink flows
 - Internal sync profiles so Docs/DOCX can share one Markdown flow, Slides/PPTX can share one Marp flow, and Sheets/XLSX can share one CSV flow
 - Automatic spreadsheet shape switching:
@@ -96,15 +96,22 @@ gdrivesync auth logout --all
 gdrivesync auth list [--json]
 gdrivesync auth use <account> [--json]
 gdrivesync auth status [--json]
+gdrivesync ai auth login openai
+gdrivesync ai auth login anthropic
+gdrivesync ai auth logout openai
+gdrivesync ai auth logout anthropic
+gdrivesync ai auth status [--json]
+gdrivesync ai auth test openai|anthropic [--json]
+gdrivesync configure image-enrichment [--json]
 gdrivesync doctor [--cwd path] [--json] [--repair]
 gdrivesync inspect <google-file-url-or-id> [--json]
 gdrivesync metadata <google-file-url-or-id> [--json]
-gdrivesync export <google-file-url-or-id> [output-path] [--json] [--include-backgrounds] [--image-enrichment off|local] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-store alt-plus-comment|alt-only]
-gdrivesync link <google-file-url-or-id> <local-path> [--cwd path] [--json] [--force] [--image-enrichment off|local] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-store alt-plus-comment|alt-only]
+gdrivesync export <google-file-url-or-id> [output-path] [--json] [--include-backgrounds] [--image-enrichment off|local|cloud|hybrid] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-cloud-provider openai|anthropic] [--image-enrichment-cloud-model <model>] [--image-enrichment-max-images <n>] [--image-enrichment-store alt-plus-comment|alt-only]
+gdrivesync link <google-file-url-or-id> <local-path> [--cwd path] [--json] [--force] [--image-enrichment off|local|cloud|hybrid] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-cloud-provider openai|anthropic] [--image-enrichment-cloud-model <model>] [--image-enrichment-max-images <n>] [--image-enrichment-store alt-plus-comment|alt-only]
 gdrivesync status <local-path> [--cwd path] [--json]
 gdrivesync status --all [--cwd path] [--json]
-gdrivesync sync <local-path> [--cwd path] [--json] [--force] [--image-enrichment off|local] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-store alt-plus-comment|alt-only]
-gdrivesync sync --all [--cwd path] [--json] [--force] [--image-enrichment off|local] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-store alt-plus-comment|alt-only]
+gdrivesync sync <local-path> [--cwd path] [--json] [--force] [--image-enrichment off|local|cloud|hybrid] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-cloud-provider openai|anthropic] [--image-enrichment-cloud-model <model>] [--image-enrichment-max-images <n>] [--image-enrichment-store alt-plus-comment|alt-only]
+gdrivesync sync --all [--cwd path] [--json] [--force] [--image-enrichment off|local|cloud|hybrid] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-cloud-provider openai|anthropic] [--image-enrichment-cloud-model <model>] [--image-enrichment-max-images <n>] [--image-enrichment-store alt-plus-comment|alt-only]
 gdrivesync unlink <local-path> [--cwd path] [--json] [--remove-generated]
 ```
 
@@ -112,6 +119,10 @@ Key CLI behaviors:
 - `auth login` connects a Google account; connecting the same account again refreshes its saved session
 - `auth list` and `auth use` expose the multi-account model explicitly for agents
 - `auth logout` requires `--account` or `--all`
+- `ai auth login/logout/status/test` manages optional OpenAI and Anthropic API keys for cloud image enrichment
+- `configure image-enrichment` is the rerunnable human CLI setup flow for local OCR or cloud AI defaults
+- CLI cloud provider keys resolve in this order: `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, then OS keychain, then missing
+- CLI image-enrichment defaults are stored per user in a small local config file; explicit flags still override them
 - `link` immediately creates the manifest entry and runs an initial sync
 - `link` binds the local file to the account that successfully read the source file
 - pasted-link imports probe the default connected account first, then other connected accounts
@@ -122,8 +133,9 @@ Key CLI behaviors:
 - top-level command failures stay machine-readable in `--json` mode with stable error codes
 - `export` writes to stdout when no output path is given, and writes files when one is provided
 - oversized native Google Slides decks that fall back to the Slides API omit slide background images by default; use `--include-backgrounds` if you want them
-- CLI image enrichment stays explicit and local-only; use `--image-enrichment local` when you want OCR-based image alt-text improvements for Markdown or Marp outputs
+- CLI image enrichment defaults can come from `gdrivesync configure image-enrichment`; explicit `--image-enrichment ...` flags still override them
 - `doctor --repair` backs up corrupt CLI auth or manifest state before restoring a working baseline
+- when a Markdown or Marp file was previously enriched with local OCR, switching to cloud mode will upgrade those machine-generated image descriptions on the next sync even if the Google file did not change
 
 Examples:
 
@@ -133,11 +145,15 @@ npm run cli -- auth list --json
 npm run cli -- auth use me@example.com --json
 npm run cli -- auth status --json
 npm run cli -- auth logout --account me@example.com --json
+npm run cli -- ai auth status --json
+npm run cli -- ai auth test openai --json
+npm run cli -- configure image-enrichment
 npm run cli -- doctor --cwd ./data --json
 npm run cli -- doctor --cwd ./data --json --repair
 npm run cli -- inspect https://docs.google.com/document/d/<file-id>/edit --json
 npm run cli -- export https://docs.google.com/document/d/<file-id>/edit
 npm run cli -- export https://docs.google.com/presentation/d/<file-id>/edit ./deck.md --json
+npm run cli -- export https://docs.google.com/presentation/d/<file-id>/edit ./deck.md --image-enrichment hybrid --image-enrichment-cloud-provider openai --json
 npm run cli -- export https://docs.google.com/presentation/d/<file-id>/edit ./deck.md --image-enrichment local --json
 npm run cli -- export https://docs.google.com/spreadsheets/d/<file-id>/edit ./sheet.csv --json
 npm run cli -- link https://docs.google.com/document/d/<file-id>/edit ./notes/spec.md --cwd ./data --json
@@ -277,38 +293,59 @@ If you are building agent integrations, prefer:
 
 There is also a short agent-focused usage guide in [docs/agent-cli.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/agent-cli.md).
 
-## Local image enrichment
+## Image enrichment
 
-GDriveSync can optionally improve generated Markdown and Marp image alt text using local OCR. This is a local-only feature in v1: no image bytes are uploaded to GDriveSync servers or third-party APIs.
+GDriveSync can optionally improve generated Markdown and Marp image alt text using either local OCR or direct provider APIs from the user's machine. GDriveSync does not proxy these requests through its own servers.
 
 Default behavior:
 - VS Code extension: `gdocSync.imageEnrichment.mode = prompt`
-- CLI: image enrichment stays off unless you pass `--image-enrichment local`
+- CLI: image enrichment stays off unless you save defaults with `gdrivesync configure image-enrichment` or pass explicit `--image-enrichment ...` flags
 
 Supported outputs:
 - Markdown from Google Docs and DOCX
 - Marp-flavored Markdown from Google Slides and PowerPoint
 - CSV outputs are not affected
 
-Provider order:
+Modes:
+- `prompt`: extension-only one-time prompt for local OCR
+- `off`: no image enrichment
+- `local`: Apple Vision on macOS when possible, then Tesseract if installed
+- `cloud`: provider-only image understanding through OpenAI or Anthropic
+- `hybrid`: local OCR first, then cloud only for still-unresolved images
+
+Local provider order:
 - macOS prefers Apple Vision when the local helper can be compiled
 - otherwise GDriveSync uses `tesseract` if it is installed
 - otherwise sync/export falls back to the current no-enrichment behavior
 
 Extension settings:
-- `gdocSync.imageEnrichment.mode`: `prompt | off | local`
+- `gdocSync.imageEnrichment.mode`: `prompt | off | local | cloud | hybrid`
 - `gdocSync.imageEnrichment.provider`: `auto | apple-vision | tesseract`
+- `gdocSync.imageEnrichment.cloudProvider`: `openai | anthropic`
+- `gdocSync.imageEnrichment.cloudModel`: optional model override
+- `gdocSync.imageEnrichment.maxImagesPerRun`: cap cloud or hybrid image uploads per sync
 - `gdocSync.imageEnrichment.store`: `alt-plus-comment | alt-only`
 - `gdocSync.imageEnrichment.onlyWhenAltGeneric`: only enrich generic generated alt text
+
+Extension provider-key handling:
+- cloud provider keys are stored only in VS Code `SecretStorage`
+- use `Configure Image Enrichment...` to set mode, connect providers, test them, or switch the default cloud provider without editing settings manually
+- on first cloud use per provider, the extension asks for one-time consent because eligible images leave the machine and provider billing may apply
+
+CLI provider-key handling:
+- automation can use `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`
+- humans can use `gdrivesync configure image-enrichment` for the full interactive setup flow, or `gdrivesync ai auth ...` for low-level provider-key management
+- stored CLI provider keys live in the OS keychain, not in `.gdrivesync.json`
 
 When enabled, GDriveSync can rewrite generic image alt text and optionally append compact OCR metadata comments like:
 
 ```md
 ![Comparison graphic: Hairburst vs drugstore multivitamin](./deck.assets/slide-23-image-1.png)
 <!-- gdrivesync:image-meta {"v":1,"hash":"sha256:...","source":"apple-vision","ocr":"HAIR BURST ... MULTIVITAMIN"} -->
+<!-- gdrivesync:image-meta {"v":1,"hash":"sha256:...","source":"openai","model":"gpt-5.4-nano","detail":"Comparison ad showing Hairburst against drugstore multivitamins."} -->
 ```
 
-The OCR cache is per-user and keyed by image hash, so unchanged assets are not reprocessed on every sync.
+The image-enrichment cache is per-user and keyed by image hash plus provider/model, so unchanged assets are not reprocessed on every sync.
 
 ## Multi-account behavior
 
@@ -358,6 +395,6 @@ The CLI is intended to be a real integration surface for agent builders, not jus
 - Presentation sync targets Marp-flavored Markdown and focuses on slide text plus extracted images rather than full visual layout fidelity
 - Very large native Google Slides decks may bypass Drive export and use the Google Slides API fallback automatically
 - Spreadsheet sync only supports native Google Sheets and `.xlsx` in v1
-- Image enrichment in v1 is local OCR only; it does not provide semantic image captioning beyond OCR-derived summaries
+- Cloud image enrichment is explicit and opt-in; it requires user-supplied OpenAI or Anthropic credentials
 - Apple Vision enrichment requires macOS plus local Swift compiler availability; otherwise GDriveSync falls back to Tesseract when installed
 - Linked files must live inside an open VS Code workspace folder

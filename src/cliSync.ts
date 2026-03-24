@@ -342,6 +342,20 @@ export class CliSyncManager {
       !needsAssetMigration &&
       !trackedAssetsNeedRepair
     ) {
+      const localEnrichmentOutcome = await this.maybeRefreshImageEnrichment(
+        baseTargetPath,
+        linkedFile,
+        profile,
+        metadata,
+        account,
+        rebound,
+        localText,
+        options
+      );
+      if (localEnrichmentOutcome) {
+        return localEnrichmentOutcome;
+      }
+
       return {
         status: "skipped",
         message: "Remote version unchanged."
@@ -410,8 +424,16 @@ export class CliSyncManager {
     preparedContent: { markdown: string; assets: GeneratedFilePayload[] },
     imageEnrichmentSettings: ImageEnrichmentSettings | undefined,
     progress?: (message: string) => void
-  ): Promise<{ markdown: string; assets: GeneratedFilePayload[]; stats?: { enrichedImageCount: number; provider?: string } }> {
-    if (!imageEnrichmentSettings || imageEnrichmentSettings.mode !== "local") {
+  ): Promise<{
+    markdown: string;
+    assets: GeneratedFilePayload[];
+    stats?: {
+      enrichedImageCount: number;
+      providerLabel?: string;
+      failureMessages?: string[];
+    };
+  }> {
+    if (!imageEnrichmentSettings || imageEnrichmentSettings.mode === "off" || imageEnrichmentSettings.mode === "prompt") {
       return {
         ...preparedContent
       };
@@ -429,38 +451,117 @@ export class CliSyncManager {
           }
         : undefined
     );
+    progress?.(
+      `Image enrichment completed: mode=${imageEnrichmentSettings.mode}, eligible=${enrichedResult.stats.eligibleImageCount}, genericEligible=${enrichedResult.stats.genericCandidateCount}, upgradeEligible=${enrichedResult.stats.upgradeCandidateCount}, enriched=${enrichedResult.stats.enrichedImageCount}, cacheHits=${enrichedResult.stats.cacheHitCount}, skipped=${enrichedResult.stats.skippedImageCount}.`
+    );
+    for (const failureMessage of enrichedResult.stats.failureMessages) {
+      progress?.(`Image enrichment warning: ${failureMessage}`);
+    }
     return {
       markdown: enrichedResult.markdown,
       assets: preparedContent.assets,
       stats: {
         enrichedImageCount: enrichedResult.stats.enrichedImageCount,
-        provider: enrichedResult.stats.provider
+        providerLabel: enrichedResult.stats.providerLabel,
+        failureMessages: enrichedResult.stats.failureMessages
       }
     };
   }
 
   private buildMarkdownSyncMessage(
     fileName: string,
-    enrichmentStats?: { enrichedImageCount: number; provider?: string }
+    enrichmentStats?: { enrichedImageCount: number; providerLabel?: string; failureMessages?: string[] }
   ): string {
+    const warningLabel =
+      enrichmentStats?.failureMessages && enrichmentStats.failureMessages.length > 0
+        ? " Some images could not be enriched."
+        : "";
+
     if (!enrichmentStats?.enrichedImageCount) {
-      return `Synced ${fileName}.`;
+      return `Synced ${fileName}.${warningLabel}`;
     }
 
-    const providerLabel = enrichmentStats.provider ? ` using ${enrichmentStats.provider}` : "";
-    return `Synced ${fileName} and enriched ${enrichmentStats.enrichedImageCount} image${enrichmentStats.enrichedImageCount === 1 ? "" : "s"}${providerLabel}.`;
+    const providerLabel = enrichmentStats.providerLabel ? ` using ${enrichmentStats.providerLabel}` : "";
+    return `Synced ${fileName} and enriched ${enrichmentStats.enrichedImageCount} image${enrichmentStats.enrichedImageCount === 1 ? "" : "s"}${providerLabel}.${warningLabel}`;
   }
 
   private buildExportMessage(
     baseMessage: string,
-    enrichmentStats?: { enrichedImageCount: number; provider?: string }
+    enrichmentStats?: { enrichedImageCount: number; providerLabel?: string; failureMessages?: string[] }
   ): string {
+    const warningLabel =
+      enrichmentStats?.failureMessages && enrichmentStats.failureMessages.length > 0
+        ? " Some images could not be enriched."
+        : "";
+
     if (!enrichmentStats?.enrichedImageCount) {
-      return baseMessage;
+      return `${baseMessage}${warningLabel}`;
     }
 
-    const providerLabel = enrichmentStats.provider ? ` using ${enrichmentStats.provider}` : "";
-    return `${baseMessage} Enriched ${enrichmentStats.enrichedImageCount} image${enrichmentStats.enrichedImageCount === 1 ? "" : "s"}${providerLabel}.`;
+    const providerLabel = enrichmentStats.providerLabel ? ` using ${enrichmentStats.providerLabel}` : "";
+    return `${baseMessage} Enriched ${enrichmentStats.enrichedImageCount} image${enrichmentStats.enrichedImageCount === 1 ? "" : "s"}${providerLabel}.${warningLabel}`;
+  }
+
+  private async maybeRefreshImageEnrichment(
+    baseTargetPath: string,
+    linkedFile: LinkedFileContext,
+    profile: ReturnType<typeof getSyncProfile>,
+    metadata: { id: string; name: string; mimeType: string; version: string; resourceKey?: string; webViewLink?: string },
+    account: ConnectedGoogleAccount,
+    rebound: SyncOutcome["rebind"] | undefined,
+    localText: string | undefined,
+    options: CliSyncOptions
+  ): Promise<SyncOutcome | undefined> {
+    if (!localText || !options.imageEnrichmentSettings || options.imageEnrichmentSettings.mode === "off") {
+      return undefined;
+    }
+
+    const localAssets = await this.readTrackedGeneratedFilePayloads(baseTargetPath, linkedFile.entry);
+    if (localAssets.length === 0) {
+      return undefined;
+    }
+
+    const localState = await this.readLocalFileState(baseTargetPath, localText);
+    if (needsOverwriteConfirmation(localState, linkedFile.entry.lastLocalHash) && !options.force) {
+      return undefined;
+    }
+
+    const enrichedContent = await this.maybeApplyImageEnrichment(
+      {
+        markdown: localText,
+        assets: localAssets
+      },
+      options.imageEnrichmentSettings,
+      options.progress
+    );
+    if (enrichedContent.markdown === localText) {
+      return undefined;
+    }
+
+    await this.writeTextFile(baseTargetPath, enrichedContent.markdown);
+    const nextHash = sha256Text(enrichedContent.markdown);
+    await this.manifestStore.updateLinkedFile(baseTargetPath, (entry) => ({
+      ...entry,
+      outputKind: "file",
+      accountId: account.accountId,
+      accountEmail: account.accountEmail,
+      title: metadata.name,
+      sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
+      sourceMimeType: metadata.mimeType,
+      resourceKey: metadata.resourceKey || entry.resourceKey,
+      lastDriveVersion: metadata.version,
+      lastLocalHash: nextHash,
+      lastSyncedAt: new Date().toISOString()
+    }));
+
+    options.progress?.(`Applied image enrichment refresh to ${path.basename(baseTargetPath)} without downloading new Google content.`);
+    return {
+      status: "synced",
+      message: rebound
+        ? `${this.buildMarkdownSyncMessage(path.basename(baseTargetPath), enrichedContent.stats)} Rebound it to ${account.accountEmail || account.accountId}.`
+        : this.buildMarkdownSyncMessage(path.basename(baseTargetPath), enrichedContent.stats),
+      rebind: rebound
+    };
   }
 
   private async doSpreadsheetSync(
@@ -721,6 +822,55 @@ export class CliSyncManager {
     }
 
     return { hasMissing, hasModified };
+  }
+
+  private async readTrackedGeneratedFilePayloads(
+    baseTargetPath: string,
+    entry: LinkedFileEntry
+  ): Promise<GeneratedFilePayload[]> {
+    const trackedGeneratedFiles = this.getTrackedGeneratedFiles(entry);
+    const payloads: GeneratedFilePayload[] = [];
+    const fileDirectory = path.dirname(baseTargetPath);
+    for (const generatedFile of trackedGeneratedFiles) {
+      const absolutePath = path.join(fileDirectory, ...generatedFile.relativePath.split("/"));
+      const fileBytes = await readFile(absolutePath);
+      const mimeType = this.mimeTypeFromGeneratedPath(generatedFile.relativePath);
+      if (!mimeType) {
+        continue;
+      }
+      payloads.push({
+        relativePath: generatedFile.relativePath,
+        bytes: fileBytes,
+        mimeType,
+        contentHash: generatedFile.contentHash || sha256Bytes(fileBytes)
+      });
+    }
+
+    return payloads;
+  }
+
+  private mimeTypeFromGeneratedPath(relativePath: string): string | undefined {
+    const extension = path.extname(relativePath).toLowerCase();
+    if (extension === ".png") {
+      return "image/png";
+    }
+    if (extension === ".jpg" || extension === ".jpeg") {
+      return "image/jpeg";
+    }
+    if (extension === ".gif") {
+      return "image/gif";
+    }
+    if (extension === ".webp") {
+      return "image/webp";
+    }
+    if (extension === ".bmp") {
+      return "image/bmp";
+    }
+    if (extension === ".tif" || extension === ".tiff") {
+      return "image/tiff";
+    }
+
+    return undefined;
   }
 
   private async syncGeneratedFiles(

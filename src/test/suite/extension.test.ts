@@ -14,6 +14,7 @@ suite("GDriveSync extension", () => {
       "gdocSync.disconnectGoogleAccount",
       "gdocSync.switchDefaultGoogleAccount",
       "gdocSync.googleAccounts",
+      "gdocSync.configureImageEnrichment",
       "gdocSync.linkCurrentFile",
       "gdocSync.importGoogleDoc",
       "gdocSync.syncCurrentFile",

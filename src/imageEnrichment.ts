@@ -2,28 +2,54 @@ import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { inspectAppleVisionCapability, runAppleVisionOcr } from "./appleVisionOcr";
+import {
+  CloudCredentialSource,
+  CloudImageInferenceClient,
+  CloudImageKeyResolver,
+  CloudImageProvider,
+  HttpCloudImageInferenceClient,
+  ImageEnrichmentProviderName,
+  ResolvedCloudApiKey,
+  formatCloudProviderLabel,
+  getDefaultCloudModel,
+  resolveCloudModel
+} from "./cloudImageProviders";
 import { inspectTesseractCapability, runTesseractOcr } from "./tesseractOcr";
 import { GeneratedFilePayload } from "./types";
 import { sha256Bytes } from "./utils/hash";
 
-export type ImageEnrichmentMode = "off" | "local" | "prompt";
+export type ImageEnrichmentMode = "off" | "local" | "prompt" | "cloud" | "hybrid";
 export type ImageEnrichmentProvider = "auto" | "apple-vision" | "tesseract";
+export type ImageEnrichmentCloudProvider = CloudImageProvider;
 export type ImageEnrichmentStoreMode = "alt-only" | "alt-plus-comment";
 
 export interface ImageEnrichmentSettings {
   mode: ImageEnrichmentMode;
   provider: ImageEnrichmentProvider;
+  cloudProvider: ImageEnrichmentCloudProvider;
+  cloudModel?: string;
+  maxImagesPerRun: number;
   store: ImageEnrichmentStoreMode;
   onlyWhenAltGeneric: boolean;
 }
 
 export interface ImageEnrichmentStats {
   eligibleImageCount: number;
+  genericCandidateCount: number;
+  upgradeCandidateCount: number;
   processedImageCount: number;
   enrichedImageCount: number;
   cacheHitCount: number;
   commentCount: number;
-  provider?: "apple-vision" | "tesseract";
+  provider?: ImageEnrichmentProviderName;
+  providerLabel?: string;
+  providersUsed: ImageEnrichmentProviderName[];
+  cloudProvider?: CloudImageProvider;
+  cloudModel?: string;
+  cloudKeySource?: CloudCredentialSource;
+  cloudSentCount: number;
+  skippedImageCount: number;
+  failureMessages: string[];
 }
 
 export interface ImageEnrichmentCapabilityReport {
@@ -40,13 +66,29 @@ interface ImageReferenceCandidate {
   altText: string;
   normalizedImagePath: string;
   asset: GeneratedFilePayload;
+  existingMeta?: ParsedImageMetaComment;
+}
+
+type ImageReferenceClassification = "generic" | "human" | "machine-local" | "machine-cloud";
+
+interface ParsedImageMetaComment {
+  source: ImageEnrichmentProviderName;
+  hash?: string;
+  model?: string;
+}
+
+interface ClassifiedImageReferenceCandidate extends ImageReferenceCandidate {
+  classification: ImageReferenceClassification;
 }
 
 interface CachedImageEnrichmentRecord {
-  version: 1;
-  provider: "apple-vision" | "tesseract";
+  version: 2;
+  provider: ImageEnrichmentProviderName;
   contentHash: string;
-  normalizedText: string;
+  model?: string;
+  promptVersion: number;
+  normalizedText?: string;
+  detail?: string;
   altText: string;
   createdAt: string;
 }
@@ -56,13 +98,18 @@ interface OcrCandidate {
   candidate: ImageReferenceCandidate;
 }
 
-const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
-const IMAGE_META_COMMENT_PATTERN = /\n?<!-- gdrivesync:image-meta \{[^\n]*\} -->/g;
+interface PendingCloudCandidate {
+  candidate: ImageReferenceCandidate;
+}
+
+const MARKDOWN_IMAGE_PATTERN = /!\[([^\]]*)\]\(([^)\s]+)\)(?:\r?\n<!-- gdrivesync:image-meta (\{[^\n]*\}) -->)?/g;
 const INLINE_DATA_URI_PATTERN = /^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/;
 const MIN_IMAGE_AREA = 18_000;
 const MIN_IMAGE_EDGE = 96;
 const OCR_COMMENT_MAX_LENGTH = 500;
 const ALT_TEXT_MAX_LENGTH = 140;
+const CLOUD_PROMPT_VERSION = 1;
+const LOCAL_PROMPT_VERSION = 1;
 const RASTER_MIME_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -78,6 +125,22 @@ function normalizeRelativeAssetPath(assetPath: string): string {
 
 function escapeMarkdownAltText(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+}
+
+function buildEmptyStats(): ImageEnrichmentStats {
+  return {
+    eligibleImageCount: 0,
+    genericCandidateCount: 0,
+    upgradeCandidateCount: 0,
+    processedImageCount: 0,
+    enrichedImageCount: 0,
+    cacheHitCount: 0,
+    commentCount: 0,
+    providersUsed: [],
+    cloudSentCount: 0,
+    skippedImageCount: 0,
+    failureMessages: []
+  };
 }
 
 export function normalizeOcrText(rawValue: string | undefined): string {
@@ -138,11 +201,13 @@ export function deriveAltText(normalizedOcrText: string): string | undefined {
   return clipped;
 }
 
-function buildImageMetaComment(contentHash: string, provider: "apple-vision" | "tesseract", normalizedOcrText: string): string {
-  const clippedOcr = normalizedOcrText.length > OCR_COMMENT_MAX_LENGTH
-    ? `${normalizedOcrText.slice(0, OCR_COMMENT_MAX_LENGTH - 1).trimEnd()}…`
-    : normalizedOcrText;
-  return `<!-- gdrivesync:image-meta ${JSON.stringify({ v: 1, hash: contentHash, source: provider, ocr: clippedOcr })} -->`;
+function formatProviderLabel(provider: ImageEnrichmentProviderName, model?: string): string {
+  if (provider === "openai" || provider === "anthropic") {
+    const cloudLabel = formatCloudProviderLabel(provider);
+    return model ? `${cloudLabel} (${model})` : cloudLabel;
+  }
+
+  return provider;
 }
 
 function mimeTypeToExtension(mimeType: string): string {
@@ -271,10 +336,6 @@ function isTooSmallForUsefulText(asset: GeneratedFilePayload): boolean {
   );
 }
 
-function stripExistingImageMetaComments(markdown: string): string {
-  return markdown.replace(IMAGE_META_COMMENT_PATTERN, "");
-}
-
 function resolveCandidateAsset(
   imagePath: string,
   assetByPath: Map<string, GeneratedFilePayload>
@@ -305,27 +366,54 @@ function resolveCandidateAsset(
   };
 }
 
-export function findEligibleImageReferences(
-  markdown: string,
-  assets: GeneratedFilePayload[],
-  settings: Pick<ImageEnrichmentSettings, "onlyWhenAltGeneric">
-): ImageReferenceCandidate[] {
+function parseImageMetaComment(
+  rawPayload: string | undefined,
+  asset: GeneratedFilePayload
+): ParsedImageMetaComment | undefined {
+  if (!rawPayload) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(rawPayload) as Record<string, unknown>;
+    const source = parsed.source;
+    if (
+      source !== "apple-vision" &&
+      source !== "tesseract" &&
+      source !== "openai" &&
+      source !== "anthropic"
+    ) {
+      return undefined;
+    }
+
+    const hash = typeof parsed.hash === "string" ? parsed.hash : undefined;
+    if (hash && hash !== asset.contentHash) {
+      return undefined;
+    }
+
+    return {
+      source,
+      hash,
+      model: typeof parsed.model === "string" ? parsed.model : undefined
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function collectImageReferenceCandidates(markdown: string, assets: GeneratedFilePayload[]): ImageReferenceCandidate[] {
   const assetByPath = new Map(
     assets
       .filter((asset) => RASTER_MIME_TYPES.has(asset.mimeType))
       .map((asset) => [normalizeRelativeAssetPath(asset.relativePath), asset])
   );
-  const cleanedMarkdown = stripExistingImageMetaComments(markdown);
   const candidates: ImageReferenceCandidate[] = [];
   let match: RegExpExecArray | null;
-  while ((match = MARKDOWN_IMAGE_PATTERN.exec(cleanedMarkdown))) {
+  while ((match = MARKDOWN_IMAGE_PATTERN.exec(markdown))) {
     const altText = match[1] || "";
     const imagePath = normalizeRelativeAssetPath(match[2] || "");
     const asset = resolveCandidateAsset(imagePath, assetByPath);
     if (!asset) {
-      continue;
-    }
-    if (settings.onlyWhenAltGeneric && !isGenericImageAltText(altText)) {
       continue;
     }
     if (isTooSmallForUsefulText(asset)) {
@@ -335,11 +423,22 @@ export function findEligibleImageReferences(
     candidates.push({
       altText,
       normalizedImagePath: imagePath,
-      asset
+      asset,
+      existingMeta: parseImageMetaComment(match[3], asset)
     });
   }
 
   return candidates;
+}
+
+export function findEligibleImageReferences(
+  markdown: string,
+  assets: GeneratedFilePayload[],
+  settings: Pick<ImageEnrichmentSettings, "onlyWhenAltGeneric">
+): ImageReferenceCandidate[] {
+  return collectImageReferenceCandidates(markdown, assets).filter((candidate) =>
+    settings.onlyWhenAltGeneric ? isGenericImageAltText(candidate.altText) : true
+  );
 }
 
 export function shouldPromptForImageEnrichment(
@@ -350,27 +449,100 @@ export function shouldPromptForImageEnrichment(
   return mode === "prompt" && reason !== "open" && eligibleImageCount > 0;
 }
 
+function sanitizeCacheSegment(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]+/g, "_");
+}
+
+function buildCommentFromRecord(record: CachedImageEnrichmentRecord): string {
+  const basePayload: Record<string, unknown> = {
+    v: 1,
+    hash: record.contentHash,
+    source: record.provider
+  };
+
+  if (record.provider === "openai" || record.provider === "anthropic") {
+    if (record.model) {
+      basePayload.model = record.model;
+    }
+    if (record.detail) {
+      basePayload.detail = record.detail;
+    }
+    return `<!-- gdrivesync:image-meta ${JSON.stringify(basePayload)} -->`;
+  }
+
+  const clippedOcr = (record.normalizedText || "").length > OCR_COMMENT_MAX_LENGTH
+    ? `${(record.normalizedText || "").slice(0, OCR_COMMENT_MAX_LENGTH - 1).trimEnd()}…`
+    : (record.normalizedText || "");
+  return `<!-- gdrivesync:image-meta ${JSON.stringify({ ...basePayload, ocr: clippedOcr })} -->`;
+}
+
 async function loadCachedResult(
   cacheRootPath: string,
-  provider: "apple-vision" | "tesseract",
-  contentHash: string
+  provider: ImageEnrichmentProviderName,
+  contentHash: string,
+  options?: { model?: string; promptVersion?: number }
 ): Promise<CachedImageEnrichmentRecord | undefined> {
-  const cachePath = path.join(cacheRootPath, "results", provider, `${contentHash.replace(/^sha256:/, "")}.json`);
+  const cacheDirectory =
+    provider === "openai" || provider === "anthropic"
+      ? path.join(cacheRootPath, "results", provider, sanitizeCacheSegment(options?.model || getDefaultCloudModel(provider)))
+      : path.join(cacheRootPath, "results", provider);
+  const cachePath = path.join(cacheDirectory, `${contentHash.replace(/^sha256:/, "")}.json`);
   if (!(await pathExists(cachePath))) {
     return undefined;
   }
 
   try {
     const rawValue = await readFile(cachePath, "utf8");
-    const parsed = JSON.parse(rawValue) as CachedImageEnrichmentRecord;
+    const parsed = JSON.parse(rawValue) as {
+      version?: number;
+      provider?: ImageEnrichmentProviderName;
+      contentHash?: string;
+      model?: string;
+      promptVersion?: number;
+      normalizedText?: string;
+      detail?: string;
+      altText?: string;
+      createdAt?: string;
+    };
+    if (parsed.version === 2) {
+      if (
+        parsed.provider === provider &&
+        parsed.contentHash === contentHash &&
+        typeof parsed.altText === "string" &&
+        parsed.promptVersion === (options?.promptVersion || LOCAL_PROMPT_VERSION)
+      ) {
+        return {
+          version: 2,
+          provider,
+          contentHash,
+          model: typeof parsed.model === "string" ? parsed.model : undefined,
+          promptVersion: parsed.promptVersion,
+          normalizedText: typeof parsed.normalizedText === "string" ? parsed.normalizedText : undefined,
+          detail: typeof parsed.detail === "string" ? parsed.detail : undefined,
+          altText: parsed.altText,
+          createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString()
+        };
+      }
+    }
+
     if (
       parsed.version === 1 &&
+      provider !== "openai" &&
+      provider !== "anthropic" &&
       parsed.provider === provider &&
       parsed.contentHash === contentHash &&
       typeof parsed.normalizedText === "string" &&
       typeof parsed.altText === "string"
     ) {
-      return parsed;
+      return {
+        version: 2,
+        provider,
+        contentHash,
+        promptVersion: LOCAL_PROMPT_VERSION,
+        normalizedText: parsed.normalizedText,
+        altText: parsed.altText,
+        createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString()
+      };
     }
   } catch {
     return undefined;
@@ -380,7 +552,10 @@ async function loadCachedResult(
 }
 
 async function saveCachedResult(cacheRootPath: string, record: CachedImageEnrichmentRecord): Promise<void> {
-  const resultsDirectory = path.join(cacheRootPath, "results", record.provider);
+  const resultsDirectory =
+    record.provider === "openai" || record.provider === "anthropic"
+      ? path.join(cacheRootPath, "results", record.provider, sanitizeCacheSegment(record.model || getDefaultCloudModel(record.provider)))
+      : path.join(cacheRootPath, "results", record.provider);
   await mkdir(resultsDirectory, { recursive: true });
   const cachePath = path.join(resultsDirectory, `${record.contentHash.replace(/^sha256:/, "")}.json`);
   await writeFile(cachePath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
@@ -403,7 +578,9 @@ async function stageAssetForOcr(cacheRootPath: string, asset: GeneratedFilePaylo
 export class ImageEnrichmentService {
   constructor(
     private readonly cacheRootPath: string,
-    private readonly appleVisionHelperSourcePath: string
+    private readonly appleVisionHelperSourcePath: string,
+    private readonly cloudKeyResolver?: CloudImageKeyResolver,
+    private readonly cloudInferenceClient: CloudImageInferenceClient = new HttpCloudImageInferenceClient()
   ) {}
 
   async inspectCapabilities(): Promise<ImageEnrichmentCapabilityReport> {
@@ -422,41 +599,257 @@ export class ImageEnrichmentService {
     return findEligibleImageReferences(markdown, assets, settings);
   }
 
+  private async findMatchingLocalCachedRecord(candidate: ImageReferenceCandidate): Promise<CachedImageEnrichmentRecord | undefined> {
+    const normalizedAlt = candidate.altText.trim();
+    if (!normalizedAlt) {
+      return undefined;
+    }
+
+    for (const provider of ["apple-vision", "tesseract"] as const) {
+      const cached = await loadCachedResult(this.cacheRootPath, provider, candidate.asset.contentHash, {
+        promptVersion: LOCAL_PROMPT_VERSION
+      });
+      if (cached?.altText.trim() === normalizedAlt) {
+        return cached;
+      }
+    }
+
+    return undefined;
+  }
+
+  private async classifyCandidates(
+    candidates: ImageReferenceCandidate[],
+    settings: ImageEnrichmentSettings
+  ): Promise<ClassifiedImageReferenceCandidate[]> {
+    const classified: ClassifiedImageReferenceCandidate[] = [];
+    for (const candidate of candidates) {
+      let classification: ImageReferenceClassification;
+      if (candidate.existingMeta?.source === "apple-vision" || candidate.existingMeta?.source === "tesseract") {
+        classification = "machine-local";
+      } else if (candidate.existingMeta?.source === "openai" || candidate.existingMeta?.source === "anthropic") {
+        classification = "machine-cloud";
+      } else if (isGenericImageAltText(candidate.altText)) {
+        classification = "generic";
+      } else if ((settings.mode === "cloud" || settings.mode === "hybrid") && (await this.findMatchingLocalCachedRecord(candidate))) {
+        classification = "machine-local";
+      } else {
+        classification = "human";
+      }
+
+      classified.push({
+        ...candidate,
+        classification
+      });
+    }
+
+    return classified;
+  }
+
+  private shouldUseLocalStageCandidate(
+    candidate: ClassifiedImageReferenceCandidate,
+    settings: ImageEnrichmentSettings
+  ): boolean {
+    if (candidate.classification === "machine-cloud" || candidate.classification === "machine-local") {
+      return false;
+    }
+
+    if (candidate.classification === "generic") {
+      return true;
+    }
+
+    return !settings.onlyWhenAltGeneric;
+  }
+
+  private shouldUseCloudStageCandidate(
+    candidate: ClassifiedImageReferenceCandidate,
+    settings: ImageEnrichmentSettings
+  ): boolean {
+    if (candidate.classification === "machine-cloud") {
+      return false;
+    }
+
+    if (candidate.classification === "machine-local") {
+      return settings.mode === "cloud" || settings.mode === "hybrid";
+    }
+
+    if (candidate.classification === "generic") {
+      return true;
+    }
+
+    return !settings.onlyWhenAltGeneric;
+  }
+
   async enrichMarkdown(
     markdown: string,
     assets: GeneratedFilePayload[],
     settings: ImageEnrichmentSettings,
     progress?: ImageEnrichmentProgressReporter
   ): Promise<{ markdown: string; stats: ImageEnrichmentStats }> {
-    const cleanedMarkdown = stripExistingImageMetaComments(markdown);
-    if (settings.mode !== "local") {
+    if (settings.mode === "off" || settings.mode === "prompt") {
       return {
-        markdown: cleanedMarkdown,
-        stats: {
-          eligibleImageCount: 0,
-          processedImageCount: 0,
-          enrichedImageCount: 0,
-          cacheHitCount: 0,
-          commentCount: 0
-        }
+        markdown,
+        stats: buildEmptyStats()
       };
     }
 
-    const candidates = this.findEligibleImages(cleanedMarkdown, assets, settings);
+    const candidates = collectImageReferenceCandidates(markdown, assets);
     if (candidates.length === 0) {
       return {
-        markdown: cleanedMarkdown,
-        stats: {
-          eligibleImageCount: 0,
-          processedImageCount: 0,
-          enrichedImageCount: 0,
-          cacheHitCount: 0,
-          commentCount: 0
-        }
+        markdown,
+        stats: buildEmptyStats()
+      };
+    }
+
+    const classifiedCandidates = await this.classifyCandidates(candidates, settings);
+    const genericCandidates = classifiedCandidates.filter((candidate) => candidate.classification === "generic");
+    const localUpgradeCandidates = classifiedCandidates.filter((candidate) => candidate.classification === "machine-local");
+    const localStageCandidates = classifiedCandidates.filter((candidate) => this.shouldUseLocalStageCandidate(candidate, settings));
+    const cloudDirectCandidates = classifiedCandidates.filter((candidate) => this.shouldUseCloudStageCandidate(candidate, settings));
+    const eligibleImageCount =
+      settings.mode === "local"
+        ? localStageCandidates.length
+        : settings.mode === "cloud"
+          ? cloudDirectCandidates.length
+          : new Set([...localStageCandidates, ...cloudDirectCandidates].map((candidate) => candidate.normalizedImagePath)).size;
+
+    if (eligibleImageCount === 0) {
+      return {
+        markdown,
+        stats: buildEmptyStats()
       };
     }
 
     progress?.report("Analyzing images…");
+    const enrichedByPath = new Map<string, CachedImageEnrichmentRecord>();
+    const providersUsed = new Set<ImageEnrichmentProviderName>();
+    const failureMessages = new Set<string>();
+    let processedImageCount = 0;
+    let cacheHitCount = 0;
+    let cloudSentCount = 0;
+    let primaryProvider: ImageEnrichmentProviderName | undefined;
+    let providerLabel: string | undefined;
+    let cloudModel: string | undefined;
+    let cloudKeySource: CloudCredentialSource | undefined;
+
+    let unresolvedCandidates: ImageReferenceCandidate[] = [...localStageCandidates];
+
+    if (settings.mode === "local" || settings.mode === "hybrid") {
+      const localOutcome = await this.applyLocalEnrichment(unresolvedCandidates, settings, progress);
+      unresolvedCandidates = localOutcome.unresolvedCandidates;
+      processedImageCount += localOutcome.processedImageCount;
+      cacheHitCount += localOutcome.cacheHitCount;
+      for (const [key, value] of localOutcome.enrichedByPath.entries()) {
+        enrichedByPath.set(key, value);
+      }
+      localOutcome.failureMessages.forEach((message) => failureMessages.add(message));
+      if (localOutcome.provider) {
+        providersUsed.add(localOutcome.provider);
+        primaryProvider = localOutcome.provider;
+        providerLabel = formatProviderLabel(localOutcome.provider);
+      }
+    }
+
+    if (settings.mode === "cloud" || settings.mode === "hybrid") {
+      const cloudCandidates: ImageReferenceCandidate[] =
+        settings.mode === "hybrid"
+          ? [
+              ...unresolvedCandidates,
+              ...localUpgradeCandidates.filter(
+                (candidate) => !unresolvedCandidates.some((pendingCandidate) => pendingCandidate.normalizedImagePath === candidate.normalizedImagePath)
+              )
+            ]
+          : cloudDirectCandidates;
+      const cloudOutcome = await this.applyCloudEnrichment(cloudCandidates, settings, progress);
+      unresolvedCandidates = cloudOutcome.unresolvedCandidates;
+      processedImageCount += cloudOutcome.processedImageCount;
+      cacheHitCount += cloudOutcome.cacheHitCount;
+      cloudSentCount += cloudOutcome.cloudSentCount;
+      cloudKeySource = cloudOutcome.keySource;
+      cloudModel = cloudOutcome.model;
+      for (const [key, value] of cloudOutcome.enrichedByPath.entries()) {
+        enrichedByPath.set(key, value);
+      }
+      cloudOutcome.failureMessages.forEach((message) => failureMessages.add(message));
+      if (cloudOutcome.provider) {
+        providersUsed.add(cloudOutcome.provider);
+        primaryProvider = cloudOutcome.provider;
+        providerLabel =
+          settings.mode === "hybrid" && providersUsed.size > 1
+            ? `hybrid (${[...providersUsed].map((provider) => formatProviderLabel(provider, provider === cloudOutcome.provider ? cloudModel : undefined)).join(" + ")})`
+            : formatProviderLabel(cloudOutcome.provider, cloudModel);
+      }
+    }
+
+    if (settings.mode === "cloud" && !primaryProvider) {
+      providerLabel = formatProviderLabel(settings.cloudProvider, cloudModel);
+    }
+
+    let enrichedImageCount = 0;
+    let commentCount = 0;
+    const rewrittenMarkdown = markdown.replace(
+      MARKDOWN_IMAGE_PATTERN,
+      (fullMatch: string, altText: string, imagePath: string) => {
+        const normalizedImagePath = normalizeRelativeAssetPath(imagePath);
+        const enriched = enrichedByPath.get(normalizedImagePath);
+        if (!enriched) {
+          return fullMatch;
+        }
+
+        enrichedImageCount += 1;
+        const rewrittenImage = `![${escapeMarkdownAltText(enriched.altText)}](${imagePath})`;
+        if (settings.store === "alt-only") {
+          return rewrittenImage;
+        }
+
+        commentCount += 1;
+        return `${rewrittenImage}\n${buildCommentFromRecord(enriched)}`;
+      }
+    );
+
+    return {
+      markdown: rewrittenMarkdown,
+      stats: {
+        eligibleImageCount,
+        genericCandidateCount: genericCandidates.length,
+        upgradeCandidateCount: settings.mode === "cloud" || settings.mode === "hybrid" ? localUpgradeCandidates.length : 0,
+        processedImageCount,
+        enrichedImageCount,
+        cacheHitCount,
+        commentCount,
+        provider: primaryProvider,
+        providerLabel,
+        providersUsed: [...providersUsed],
+        cloudProvider: settings.mode === "cloud" || settings.mode === "hybrid" ? settings.cloudProvider : undefined,
+        cloudModel,
+        cloudKeySource,
+        cloudSentCount,
+        skippedImageCount: Math.max(0, eligibleImageCount - enrichedImageCount),
+        failureMessages: [...failureMessages]
+      }
+    };
+  }
+
+  private async applyLocalEnrichment(
+    candidates: ImageReferenceCandidate[],
+    settings: ImageEnrichmentSettings,
+    progress?: ImageEnrichmentProgressReporter
+  ): Promise<{
+    provider?: "apple-vision" | "tesseract";
+    enrichedByPath: Map<string, CachedImageEnrichmentRecord>;
+    unresolvedCandidates: ImageReferenceCandidate[];
+    processedImageCount: number;
+    cacheHitCount: number;
+    failureMessages: string[];
+  }> {
+    if (candidates.length === 0) {
+      return {
+        enrichedByPath: new Map(),
+        unresolvedCandidates: [],
+        processedImageCount: 0,
+        cacheHitCount: 0,
+        failureMessages: []
+      };
+    }
 
     const capabilityReport = await this.inspectCapabilities();
     const preferredProviders =
@@ -477,23 +870,24 @@ export class ImageEnrichmentService {
 
     if (!provider) {
       return {
-        markdown: cleanedMarkdown,
-        stats: {
-          eligibleImageCount: candidates.length,
-          processedImageCount: 0,
-          enrichedImageCount: 0,
-          cacheHitCount: 0,
-          commentCount: 0
-        }
+        enrichedByPath: new Map(),
+        unresolvedCandidates: candidates,
+        processedImageCount: 0,
+        cacheHitCount: 0,
+        failureMessages: []
       };
     }
 
-    const cacheHits = new Map<string, CachedImageEnrichmentRecord>();
+    const enrichedByPath = new Map<string, CachedImageEnrichmentRecord>();
+    let cacheHitCount = 0;
     const pendingCandidates: OcrCandidate[] = [];
     for (const candidate of candidates) {
-      const cached = await loadCachedResult(this.cacheRootPath, provider, candidate.asset.contentHash);
+      const cached = await loadCachedResult(this.cacheRootPath, provider, candidate.asset.contentHash, {
+        promptVersion: LOCAL_PROMPT_VERSION
+      });
       if (cached) {
-        cacheHits.set(candidate.normalizedImagePath, cached);
+        enrichedByPath.set(candidate.normalizedImagePath, cached);
+        cacheHitCount += 1;
         continue;
       }
 
@@ -503,77 +897,217 @@ export class ImageEnrichmentService {
       });
     }
 
-    const pendingResults = new Map<string, CachedImageEnrichmentRecord>();
+    const unresolvedCandidates: ImageReferenceCandidate[] = [];
     if (pendingCandidates.length > 0) {
-      const imagePaths = pendingCandidates.map((entry) => entry.stagedImagePath);
-      let providerResults = new Map<string, { text?: string; error?: string }>();
-      if (provider === "apple-vision") {
-        providerResults = await runAppleVisionOcr(imagePaths, this.cacheRootPath, this.appleVisionHelperSourcePath);
-      } else {
-        providerResults = await runTesseractOcr(imagePaths, capabilityReport.tesseract.path);
-      }
+      try {
+        const imagePaths = pendingCandidates.map((entry) => entry.stagedImagePath);
+        const providerResults =
+          provider === "apple-vision"
+            ? await runAppleVisionOcr(imagePaths, this.cacheRootPath, this.appleVisionHelperSourcePath)
+            : await runTesseractOcr(imagePaths, capabilityReport.tesseract.path);
 
-      let completedCount = 0;
-      for (const pendingCandidate of pendingCandidates) {
-        completedCount += 1;
-        progress?.report(`Enriching images ${completedCount}/${pendingCandidates.length}…`);
-        const providerResult = providerResults.get(path.resolve(pendingCandidate.stagedImagePath));
-        const normalizedText = normalizeOcrText(providerResult?.text);
-        const altText = deriveAltText(normalizedText);
-        if (!altText) {
-          continue;
+        let completedCount = 0;
+        for (const pendingCandidate of pendingCandidates) {
+          completedCount += 1;
+          progress?.report(`Enriching images ${completedCount}/${pendingCandidates.length}…`);
+          const providerResult = providerResults.get(path.resolve(pendingCandidate.stagedImagePath));
+          const normalizedText = normalizeOcrText(providerResult?.text);
+          const altText = deriveAltText(normalizedText);
+          if (!altText) {
+            unresolvedCandidates.push(pendingCandidate.candidate);
+            continue;
+          }
+
+          const record: CachedImageEnrichmentRecord = {
+            version: 2,
+            provider,
+            contentHash: pendingCandidate.candidate.asset.contentHash,
+            promptVersion: LOCAL_PROMPT_VERSION,
+            normalizedText,
+            altText,
+            createdAt: new Date().toISOString()
+          };
+          enrichedByPath.set(pendingCandidate.candidate.normalizedImagePath, record);
+          await saveCachedResult(this.cacheRootPath, record);
         }
-
-        const record: CachedImageEnrichmentRecord = {
-          version: 1,
+      } catch (error) {
+        return {
           provider,
-          contentHash: pendingCandidate.candidate.asset.contentHash,
-          normalizedText,
-          altText,
-          createdAt: new Date().toISOString()
+          enrichedByPath,
+          unresolvedCandidates: pendingCandidates.map((entry) => entry.candidate),
+          processedImageCount: pendingCandidates.length,
+          cacheHitCount,
+          failureMessages: [error instanceof Error ? error.message : String(error)]
         };
-        pendingResults.set(pendingCandidate.candidate.normalizedImagePath, record);
-        await saveCachedResult(this.cacheRootPath, record);
       }
     }
 
-    const enrichedByPath = new Map<string, CachedImageEnrichmentRecord>([
-      ...cacheHits.entries(),
-      ...pendingResults.entries()
-    ]);
+    return {
+      provider,
+      enrichedByPath,
+      unresolvedCandidates,
+      processedImageCount: pendingCandidates.length,
+      cacheHitCount,
+      failureMessages: []
+    };
+  }
 
-    let enrichedImageCount = 0;
-    let commentCount = 0;
-    const rewrittenMarkdown = cleanedMarkdown.replace(
-      MARKDOWN_IMAGE_PATTERN,
-      (fullMatch: string, altText: string, imagePath: string) => {
-        const normalizedImagePath = normalizeRelativeAssetPath(imagePath);
-        const enriched = enrichedByPath.get(normalizedImagePath);
-        if (!enriched) {
-          return fullMatch;
-        }
+  private async applyCloudEnrichment(
+    candidates: ImageReferenceCandidate[],
+    settings: ImageEnrichmentSettings,
+    progress?: ImageEnrichmentProgressReporter
+  ): Promise<{
+    provider?: CloudImageProvider;
+    model?: string;
+    keySource?: CloudCredentialSource;
+    enrichedByPath: Map<string, CachedImageEnrichmentRecord>;
+    unresolvedCandidates: ImageReferenceCandidate[];
+    processedImageCount: number;
+    cacheHitCount: number;
+    cloudSentCount: number;
+    skippedImageCount: number;
+    failureMessages: string[];
+  }> {
+    if (candidates.length === 0) {
+      return {
+        provider: settings.cloudProvider,
+        model: resolveCloudModel(settings.cloudProvider, settings.cloudModel),
+        enrichedByPath: new Map(),
+        unresolvedCandidates: [],
+        processedImageCount: 0,
+        cacheHitCount: 0,
+        cloudSentCount: 0,
+        skippedImageCount: 0,
+        failureMessages: []
+      };
+    }
 
-        enrichedImageCount += 1;
-        const rewrittenImage = `![${escapeMarkdownAltText(enriched.altText)}](${imagePath})`;
-        if (settings.store === "alt-only") {
-          return rewrittenImage;
-        }
-
-        commentCount += 1;
-        return `${rewrittenImage}\n${buildImageMetaComment(enriched.contentHash, enriched.provider, enriched.normalizedText)}`;
+    const model = resolveCloudModel(settings.cloudProvider, settings.cloudModel);
+    const limitedCandidates = candidates.slice(0, Math.max(0, settings.maxImagesPerRun));
+    const skippedImageCount = Math.max(0, candidates.length - limitedCandidates.length);
+    const enrichedByPath = new Map<string, CachedImageEnrichmentRecord>();
+    let cacheHitCount = 0;
+    const pendingCandidates: PendingCloudCandidate[] = [];
+    for (const candidate of limitedCandidates) {
+      const cached = await loadCachedResult(this.cacheRootPath, settings.cloudProvider, candidate.asset.contentHash, {
+        model,
+        promptVersion: CLOUD_PROMPT_VERSION
+      });
+      if (cached) {
+        enrichedByPath.set(candidate.normalizedImagePath, cached);
+        cacheHitCount += 1;
+        continue;
       }
-    );
+
+      pendingCandidates.push({ candidate });
+    }
+
+    const resolvedKey = this.cloudKeyResolver
+      ? await this.cloudKeyResolver.resolve(settings.cloudProvider)
+      : ({ provider: settings.cloudProvider, source: "missing" } as ResolvedCloudApiKey);
+    if (!resolvedKey.apiKey) {
+      return {
+        provider: settings.cloudProvider,
+        model,
+        keySource: resolvedKey.source,
+        enrichedByPath,
+        unresolvedCandidates: candidates.filter((candidate) => !enrichedByPath.has(candidate.normalizedImagePath)),
+        processedImageCount: 0,
+        cacheHitCount,
+        cloudSentCount: 0,
+        skippedImageCount,
+        failureMessages: pendingCandidates.length > 0
+          ? [`${formatCloudProviderLabel(settings.cloudProvider)} image enrichment is configured but no API key is available.`]
+          : []
+      };
+    }
+
+    const unresolvedCandidates: ImageReferenceCandidate[] = [...candidates.slice(settings.maxImagesPerRun)];
+    const failureMessages: string[] = [];
+    if (pendingCandidates.length > 0) {
+      try {
+        progress?.report(`Analyzing images with ${formatCloudProviderLabel(settings.cloudProvider)}…`);
+        const batchResult = await this.cloudInferenceClient.enrichImages(
+          settings.cloudProvider,
+          resolvedKey.apiKey,
+          model,
+          pendingCandidates.map((entry) => ({
+            asset: entry.candidate.asset,
+            currentAltText: entry.candidate.altText
+          }))
+        );
+        failureMessages.push(...batchResult.failureMessages);
+
+        let completedCount = 0;
+        for (const pendingCandidate of pendingCandidates) {
+          completedCount += 1;
+          progress?.report(`Enriching images ${completedCount}/${pendingCandidates.length}…`);
+          const providerResult = batchResult.results.get(pendingCandidate.candidate.asset.contentHash);
+          if (!providerResult?.useful || !providerResult.altText) {
+            unresolvedCandidates.push(pendingCandidate.candidate);
+            continue;
+          }
+
+          const record: CachedImageEnrichmentRecord = {
+            version: 2,
+            provider: settings.cloudProvider,
+            contentHash: pendingCandidate.candidate.asset.contentHash,
+            model,
+            promptVersion: CLOUD_PROMPT_VERSION,
+            detail: providerResult.detail,
+            altText: providerResult.altText,
+            createdAt: new Date().toISOString()
+          };
+          enrichedByPath.set(pendingCandidate.candidate.normalizedImagePath, record);
+          await saveCachedResult(this.cacheRootPath, record);
+        }
+      } catch (error) {
+        failureMessages.push(error instanceof Error ? error.message : String(error));
+        unresolvedCandidates.push(...pendingCandidates.map((entry) => entry.candidate));
+      }
+    }
 
     return {
-      markdown: rewrittenMarkdown,
-      stats: {
-        eligibleImageCount: candidates.length,
-        processedImageCount: pendingCandidates.length,
-        enrichedImageCount,
-        cacheHitCount: cacheHits.size,
-        commentCount,
-        provider
-      }
+      provider: settings.cloudProvider,
+      model,
+      keySource: resolvedKey.source,
+      enrichedByPath,
+      unresolvedCandidates,
+      processedImageCount: pendingCandidates.length,
+      cacheHitCount,
+      cloudSentCount: pendingCandidates.length,
+      skippedImageCount,
+      failureMessages
+    };
+  }
+
+  async resolveCloudApiKey(provider: CloudImageProvider): Promise<ResolvedCloudApiKey> {
+    if (!this.cloudKeyResolver) {
+      return {
+        provider,
+        source: "missing"
+      };
+    }
+
+    return this.cloudKeyResolver.resolve(provider);
+  }
+
+  async testCloudProvider(provider: CloudImageProvider, modelOverride?: string): Promise<{
+    provider: CloudImageProvider;
+    model: string;
+    keySource: CloudCredentialSource;
+  }> {
+    const resolvedKey = await this.resolveCloudApiKey(provider);
+    if (!resolvedKey.apiKey) {
+      throw new Error(`${formatCloudProviderLabel(provider)} is not configured yet.`);
+    }
+
+    const model = resolveCloudModel(provider, modelOverride);
+    await this.cloudInferenceClient.testProvider(provider, resolvedKey.apiKey, model);
+    return {
+      provider,
+      model,
+      keySource: resolvedKey.source
     };
   }
 }

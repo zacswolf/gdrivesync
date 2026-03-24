@@ -44,8 +44,8 @@
         <p>
           GDriveSync uses Google account access only to read supported Google Drive files that you explicitly connect
           through the VS Code extension or CLI. GDriveSync can store multiple connected Google accounts locally, but it
-          remains one-way and read-only with respect to Google Drive content. Optional local image enrichment in v1
-          runs on your device and does not upload image contents to GDriveSync-operated servers.
+          remains one-way and read-only with respect to Google Drive content. Optional image enrichment can run locally
+          on your device, or it can call a user-configured OpenAI or Anthropic API directly from the user's machine.
         </p>
 
         <h2>What data is accessed</h2>
@@ -59,7 +59,7 @@
         <ul>
           <li>OAuth tokens are stored locally in VS Code secret storage or the local CLI auth store</li>
           <li>Linked file metadata, including bound-account metadata, is stored locally in a workspace `.gdrivesync.json` file</li>
-          <li>Optional local OCR cache files for image enrichment are stored on the local machine only</li>
+          <li>Optional image-enrichment cache files are stored on the local machine only</li>
           <li>No server-side database is used in v1</li>
         </ul>
 
@@ -67,7 +67,8 @@
         <ul>
           <li>No analytics or telemetry are included in v1</li>
           <li>No linked Google file contents are stored on the companion website</li>
-          <li>No image enrichment data is sent to GDriveSync-operated servers in v1</li>
+          <li>No image enrichment data is sent to GDriveSync-operated servers</li>
+          <li>Cloud image enrichment only uses user-configured OpenAI or Anthropic credentials and is disabled by default</li>
           <li>No linked documents are shared with third parties by the extension</li>
         </ul>
 
