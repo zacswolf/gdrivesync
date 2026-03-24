@@ -4,6 +4,7 @@ import path from "node:path";
 import { CliManifestStore } from "./cliManifestStore";
 import { DriveClient } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
+import { ImageEnrichmentService } from "./imageEnrichment";
 import { inspectManifestValue, parseManifestText } from "./manifestSchema";
 import { resolveCliGoogleConfig } from "./runtimeConfig";
 import { normalizeStoredOAuthState } from "./sessionSchema";
@@ -59,6 +60,21 @@ export interface CliDoctorReport {
     desktopClientConfigured: boolean;
     hostedBaseUrl: string;
     scope: string;
+  };
+  imageEnrichment: {
+    mode: "off";
+    cacheRootPath: string;
+    appleVision: {
+      available: boolean;
+      compilerAvailable: boolean;
+      helperSourceExists: boolean;
+      status: "compiled" | "not-compiled" | "compile-failed" | "unavailable";
+      binaryPath?: string;
+    };
+    tesseract: {
+      available: boolean;
+      path?: string;
+    };
   };
   issues: DoctorIssue[];
   repair: {
@@ -188,7 +204,8 @@ export async function runCliDoctor(
   manifestStore: CliManifestStore,
   authManager: GoogleAuthManager,
   driveClient: DriveClient,
-  options: CliDoctorOptions = {}
+  options: CliDoctorOptions = {},
+  imageEnrichmentService?: ImageEnrichmentService
 ): Promise<CliDoctorReport> {
   const config = resolveCliGoogleConfig();
   const issues: DoctorIssue[] = [];
@@ -220,6 +237,19 @@ export async function runCliDoctor(
       hostedBaseUrl: config.hostedBaseUrl,
       scope: config.scope
     },
+    imageEnrichment: {
+      mode: "off",
+      cacheRootPath: "",
+      appleVision: {
+        available: false,
+        compilerAvailable: false,
+        helperSourceExists: false,
+        status: "unavailable"
+      },
+      tesseract: {
+        available: false
+      }
+    },
     issues,
     repair: {
       attempted: Boolean(options.repair),
@@ -234,6 +264,32 @@ export async function runCliDoctor(
       code: "CONFIG_MISSING_DESKTOP_CLIENT_ID",
       message: "The CLI Google desktop OAuth client ID is not configured."
     });
+  }
+
+  if (imageEnrichmentService) {
+    const imageEnrichmentCapabilities = await imageEnrichmentService.inspectCapabilities();
+    report.imageEnrichment = {
+      mode: "off",
+      cacheRootPath: imageEnrichmentCapabilities.cacheRootPath,
+      appleVision: imageEnrichmentCapabilities.appleVision,
+      tesseract: imageEnrichmentCapabilities.tesseract
+    };
+
+    if (!imageEnrichmentCapabilities.appleVision.available && imageEnrichmentCapabilities.appleVision.status === "compile-failed") {
+      issues.push({
+        severity: "warning",
+        code: "IMAGE_ENRICHMENT_APPLE_VISION_UNAVAILABLE",
+        message: "Apple Vision OCR helper compilation previously failed. Tesseract or current no-enrichment behavior will be used instead."
+      });
+    }
+
+    if (!imageEnrichmentCapabilities.tesseract.available) {
+      issues.push({
+        severity: "info",
+        code: "IMAGE_ENRICHMENT_TESSERACT_NOT_FOUND",
+        message: "Tesseract is not installed. Local image enrichment will rely on Apple Vision when available."
+      });
+    }
   }
 
   const manifestPath = manifestStore.getManifestPath();
@@ -419,7 +475,8 @@ export function formatDoctorReport(report: CliDoctorReport): string {
       report.auth.authenticated
         ? `signed in${report.auth.defaultAccountEmail ? ` as ${report.auth.defaultAccountEmail}` : ""}`
         : "not signed in"
-    }`
+    }`,
+    `Image enrichment: ${report.imageEnrichment.mode} • Apple Vision ${report.imageEnrichment.appleVision.status} • Tesseract ${report.imageEnrichment.tesseract.available ? "available" : "not found"}`
   ];
 
   if (report.issues.length === 0) {

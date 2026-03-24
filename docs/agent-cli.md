@@ -9,6 +9,7 @@ GDriveSync is most useful to agents when it is treated like a stateful bridge be
 - Use `gdrivesync link ...` when the agent wants durable workspace state that can be refreshed later.
 - Use `gdrivesync auth list --json` and `gdrivesync auth use <account> --json` when the agent needs explicit account control.
 - Use `--account <email-or-id>` on `inspect`, `export`, `link`, or `sync` when deterministic account selection matters more than the default probing behavior.
+- Use `--image-enrichment local` on `export`, `link`, or `sync` when the agent wants OCR-derived image alt text and compact image metadata comments in Markdown or Marp outputs.
 - Use `gdrivesync status --all --json --cwd <workspace>` to discover linked files before a batch run.
 - Use `gdrivesync sync --all --json --cwd <workspace>` for batch refreshes.
 - Use `gdrivesync doctor --json --cwd <workspace>` before large automated runs if the agent needs to validate auth and manifest health.
@@ -80,12 +81,20 @@ Export a Google Slides deck to Marp-flavored Markdown:
 gdrivesync export "https://docs.google.com/presentation/d/<file-id>/edit" "./deck.md" --json
 ```
 
+Export a deck with local OCR-based image enrichment:
+
+```bash
+gdrivesync export "https://docs.google.com/presentation/d/<file-id>/edit" "./deck.md" --image-enrichment local --json
+```
+
 ## Practical guidance
 
 - Expect Markdown outputs for Docs and DOCX.
 - Native Google Docs use a DOCX export path under the hood so extracted images stay much more usable than Google’s native Markdown export.
 - Expect Marp-flavored Markdown outputs for Google Slides and PowerPoint.
 - Expect CSV or folder-of-CSV outputs for Sheets and XLSX.
+- Local image enrichment is opt-in and local-only. It uses Apple Vision on macOS when possible, falls back to Tesseract when installed, and otherwise leaves the markdown unchanged.
+- When enabled in `alt-plus-comment` mode, OCR metadata is stored inline as compact `<!-- gdrivesync:image-meta ... -->` comments right after rewritten image lines.
 - Treat Google Drive as the source of truth. This project is one-way by design.
 - Expect linked files to stay pinned to their bound Google account unless that account becomes unusable, in which case GDriveSync may recover via another connected account and report the rebind.
 - If an agent wants to preserve local edits, it should inspect sync results and respect cancelled outcomes unless it intentionally reruns with `--force`.

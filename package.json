@@ -33,6 +33,7 @@
   },
   "files": [
     "dist",
+    "resources",
     "site",
     "README.md",
     "CHANGELOG.md",
@@ -200,6 +201,40 @@
           "type": "boolean",
           "default": false,
           "description": "Include slide background images when oversized native Google Slides decks fall back to the Google Slides API conversion path."
+        },
+        "gdocSync.imageEnrichment.mode": {
+          "type": "string",
+          "enum": [
+            "prompt",
+            "off",
+            "local"
+          ],
+          "default": "prompt",
+          "description": "Control local OCR-based image enrichment for Markdown and Marp outputs. Prompt asks once when an eligible sync includes images with generic alt text."
+        },
+        "gdocSync.imageEnrichment.provider": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "apple-vision",
+            "tesseract"
+          ],
+          "default": "auto",
+          "description": "Choose the preferred local OCR provider for image enrichment. Auto prefers Apple Vision on macOS and falls back to Tesseract when available."
+        },
+        "gdocSync.imageEnrichment.store": {
+          "type": "string",
+          "enum": [
+            "alt-plus-comment",
+            "alt-only"
+          ],
+          "default": "alt-plus-comment",
+          "description": "Store local OCR results as improved alt text only, or as improved alt text plus a compact HTML metadata comment."
+        },
+        "gdocSync.imageEnrichment.onlyWhenAltGeneric": {
+          "type": "boolean",
+          "default": true,
+          "description": "Only run local image enrichment when the generated image alt text is generic."
         },
         "gdocSync.development.desktopClientId": {
           "type": "string",

@@ -107,7 +107,9 @@
           GDriveSync links Google Docs and DOCX files to normal Markdown files, Google Slides and PowerPoint files to
           Marp-flavored Markdown, and Google Sheets and XLSX files to local CSV output in VS Code and through an
           agent-friendly CLI. Sync is one-way by design: Google Drive stays the source of truth. Multiple connected
-          Google accounts are supported for selecting, linking, and recovering access to files when needed.
+          Google accounts are supported for selecting, linking, and recovering access to files when needed. Markdown
+          and Marp outputs can also opt into local OCR-based image enrichment without sending image data to a hosted
+          GDriveSync service.
         </p>
       </section>
 
@@ -124,7 +126,8 @@
           <p>
             OAuth tokens for connected Google accounts stay in local secret or auth storage. File mappings,
             bound-account metadata, and sync state live in a workspace-side <code>.gdrivesync.json</code> manifest,
-            while generated Markdown assets and spreadsheet CSV folders stay in your workspace.
+            while generated Markdown assets, optional local OCR cache files, and spreadsheet CSV folders stay on your
+            machine.
           </p>
         </article>
         <article class="card">

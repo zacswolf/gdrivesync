@@ -11,6 +11,6 @@ Before deploy:
 3. Confirm the Google web OAuth client includes the Cloudflare Pages production origin
 4. Confirm the consent screen homepage and privacy links point at the deployed site
 
-The Picker page signs in with the web client, opens Google Picker, and returns canonical selected file metadata to the extension. Desktop OAuth happens directly against the extension's localhost callback and does not rely on the hosted site.
+The Picker page signs in with the web client, opens Google Picker, and returns canonical selected file metadata to the extension. Desktop OAuth happens directly against the extension's localhost callback and does not rely on the hosted site. Local OCR-based image enrichment is also unrelated to the hosted site and stays on the user's machine in v1.
 
 For automatic deploys, this repo uses a GitHub Actions workflow that runs `wrangler pages deploy` on pushes to `main`. That matches the rest of your Cloudflare Pages projects, which are already using Direct Upload.

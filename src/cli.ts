@@ -10,6 +10,8 @@ import { CliManifestStore } from "./cliManifestStore";
 import { CliSyncManager } from "./cliSync";
 import { DriveClient, GoogleApiError, PickerGrantRequiredError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
+import { resolveDefaultCliCacheRoot } from "./appleVisionOcr";
+import { ImageEnrichmentService, ImageEnrichmentSettings } from "./imageEnrichment";
 import { loadDevelopmentEnv, resolveCliGoogleConfig } from "./runtimeConfig";
 import { SlidesClient } from "./slidesClient";
 import { CorruptStateError } from "./stateErrors";
@@ -31,6 +33,9 @@ interface CliFlags {
   includeBackgrounds: boolean;
   repair: boolean;
   cwd?: string;
+  imageEnrichmentMode?: ImageEnrichmentSettings["mode"];
+  imageEnrichmentProvider?: ImageEnrichmentSettings["provider"];
+  imageEnrichmentStore?: ImageEnrichmentSettings["store"];
 }
 
 interface ParsedCliInput {
@@ -51,12 +56,12 @@ function printUsage(): void {
   gdrivesync doctor [--cwd path] [--json] [--repair]
   gdrivesync inspect <google-file-url-or-id> [--json]
   gdrivesync metadata <google-file-url-or-id> [--json]
-  gdrivesync export <google-file-url-or-id> [output-path] [--json] [--include-backgrounds]
-  gdrivesync link <google-file-url-or-id> <local-path> [--cwd path] [--json] [--force]
+  gdrivesync export <google-file-url-or-id> [output-path] [--json] [--include-backgrounds] [--image-enrichment off|local] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-store alt-plus-comment|alt-only]
+  gdrivesync link <google-file-url-or-id> <local-path> [--cwd path] [--json] [--force] [--image-enrichment off|local] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-store alt-plus-comment|alt-only]
   gdrivesync status <local-path> [--cwd path] [--json]
   gdrivesync status --all [--cwd path] [--json]
-  gdrivesync sync <local-path> [--cwd path] [--json] [--force]
-  gdrivesync sync --all [--cwd path] [--json] [--force]
+  gdrivesync sync <local-path> [--cwd path] [--json] [--force] [--image-enrichment off|local] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-store alt-plus-comment|alt-only]
+  gdrivesync sync --all [--cwd path] [--json] [--force] [--image-enrichment off|local] [--image-enrichment-provider auto|apple-vision|tesseract] [--image-enrichment-store alt-plus-comment|alt-only]
   gdrivesync unlink <local-path> [--cwd path] [--json] [--remove-generated]
 
 Flags:
@@ -67,6 +72,9 @@ Flags:
   --force             Overwrite local changes during sync
   --remove-generated   Remove tracked generated files when unlinking
   --include-backgrounds  For oversized Google Slides decks that fall back to the Slides API, include slide background images
+  --image-enrichment   Control local image OCR enrichment for Markdown/Marp outputs (off or local)
+  --image-enrichment-provider  Choose the local OCR provider (auto, apple-vision, or tesseract)
+  --image-enrichment-store  Store OCR as rewritten alt text only or alt text plus HTML comments
   --repair            Let doctor back up corrupt local state and restore a working baseline
 `);
 }
@@ -134,6 +142,33 @@ function parseCliInput(rawArgs: string[]): ParsedCliInput {
     }
     if (arg === "--repair") {
       flags.repair = true;
+      continue;
+    }
+    if (arg === "--image-enrichment") {
+      const value = rawArgs[index + 1];
+      if (value !== "off" && value !== "local") {
+        throw new Error("--image-enrichment requires off or local.");
+      }
+      flags.imageEnrichmentMode = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--image-enrichment-provider") {
+      const value = rawArgs[index + 1];
+      if (value !== "auto" && value !== "apple-vision" && value !== "tesseract") {
+        throw new Error("--image-enrichment-provider requires auto, apple-vision, or tesseract.");
+      }
+      flags.imageEnrichmentProvider = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--image-enrichment-store") {
+      const value = rawArgs[index + 1];
+      if (value !== "alt-plus-comment" && value !== "alt-only") {
+        throw new Error("--image-enrichment-store requires alt-plus-comment or alt-only.");
+      }
+      flags.imageEnrichmentStore = value;
+      index += 1;
       continue;
     }
     if (arg === "--cwd") {
@@ -350,6 +385,22 @@ function serializeAccount(account: ConnectedGoogleAccount, defaultAccountId?: st
   };
 }
 
+function resolveCliImageEnrichmentSettings(flags: CliFlags): ImageEnrichmentSettings | undefined {
+  const inferredMode =
+    flags.imageEnrichmentMode ||
+    (flags.imageEnrichmentProvider || flags.imageEnrichmentStore ? "local" : "off");
+  if (inferredMode !== "local") {
+    return undefined;
+  }
+
+  return {
+    mode: "local",
+    provider: flags.imageEnrichmentProvider || "auto",
+    store: flags.imageEnrichmentStore || "alt-plus-comment",
+    onlyWhenAltGeneric: true
+  };
+}
+
 async function main(): Promise<void> {
   await loadDevelopmentEnv(process.cwd());
 
@@ -364,9 +415,20 @@ async function main(): Promise<void> {
   const authManager = new GoogleAuthManager(tokenStore, resolveCliGoogleConfig, openExternalUrl);
   const driveClient = new DriveClient();
   const slidesClient = new SlidesClient();
+  const imageEnrichmentService = new ImageEnrichmentService(
+    resolveDefaultCliCacheRoot(),
+    path.resolve(__dirname, "../resources/appleVisionOcr.swift")
+  );
   const workspaceRoot = resolveWorkspaceRoot(parsed.flags.cwd);
   const manifestStore = new CliManifestStore(workspaceRoot);
-  const syncManager = new CliSyncManager(authManager, driveClient, manifestStore, slidesClient);
+  const syncManager = new CliSyncManager(authManager, driveClient, manifestStore, slidesClient, imageEnrichmentService);
+  const imageEnrichmentSettings = resolveCliImageEnrichmentSettings(parsed.flags);
+  const cliProgress =
+    parsed.flags.json
+      ? undefined
+      : (message: string) => {
+          process.stderr.write(`${message}\n`);
+        };
 
   if (parsed.command === "auth") {
     if (parsed.subcommand === "login") {
@@ -488,9 +550,17 @@ async function main(): Promise<void> {
   }
 
   if (parsed.command === "doctor") {
-    const report = await runCliDoctor(workspaceRoot, tokenPath, manifestStore, authManager, driveClient, {
-      repair: parsed.flags.repair
-    });
+    const report = await runCliDoctor(
+      workspaceRoot,
+      tokenPath,
+      manifestStore,
+      authManager,
+      driveClient,
+      {
+        repair: parsed.flags.repair
+      },
+      imageEnrichmentService
+    );
     if (parsed.flags.json) {
       printJsonSuccess(parsed, report);
     } else {
@@ -586,7 +656,9 @@ async function main(): Promise<void> {
       },
       {
         targetPath: resolvedOutputPath,
-        includePresentationBackgrounds: parsed.flags.includeBackgrounds
+        includePresentationBackgrounds: parsed.flags.includeBackgrounds,
+        imageEnrichmentSettings,
+        progress: cliProgress
       }
     );
 
@@ -629,7 +701,9 @@ async function main(): Promise<void> {
     const selection = await syncManager.resolveSelectionFromInput(rawInput, localPath, parsed.flags.account);
     const outcome = await syncManager.linkFile(localPath, selection, {
       force: parsed.flags.force,
-      accountId: parsed.flags.account
+      accountId: parsed.flags.account,
+      imageEnrichmentSettings,
+      progress: cliProgress
     });
     if (parsed.flags.json) {
       printJsonSuccess(parsed, {
@@ -681,9 +755,14 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (parsed.command === "sync") {
+    if (parsed.command === "sync") {
     if (parsed.flags.all) {
-      const summary = await syncManager.syncAll({ force: parsed.flags.force, accountId: parsed.flags.account });
+      const summary = await syncManager.syncAll({
+        force: parsed.flags.force,
+        accountId: parsed.flags.account,
+        imageEnrichmentSettings,
+        progress: cliProgress
+      });
       if (parsed.flags.json) {
         printJsonSuccess(parsed, {
           rootPath: workspaceRoot,
@@ -704,7 +783,12 @@ async function main(): Promise<void> {
       throw new Error("sync requires a local path or --all.");
     }
     const localPath = resolveLocalPath(workspaceRoot, localPathArg);
-    const outcome = await syncManager.syncFile(localPath, { force: parsed.flags.force, accountId: parsed.flags.account });
+    const outcome = await syncManager.syncFile(localPath, {
+      force: parsed.flags.force,
+      accountId: parsed.flags.account,
+      imageEnrichmentSettings,
+      progress: cliProgress
+    });
     if (parsed.flags.json) {
       printJsonSuccess(parsed, {
         targetPath: localPath,

@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 
 import { DriveClient, PickerGrantRequiredError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
+import { ImageEnrichmentService } from "./imageEnrichment";
 import { ManifestStore } from "./manifestStore";
 import { PickerClient } from "./pickerClient";
 import { assertDesktopClientConfigured, loadDevelopmentEnv, resolveGoogleConfigFromValues } from "./runtimeConfig";
@@ -116,7 +117,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const driveClient = new DriveClient();
   const pickerClient = new PickerClient(resolveExtensionGoogleConfig);
-  const syncManager = new SyncManager(authManager, driveClient, manifestStore, new SlidesClient());
+  const outputChannel = vscode.window.createOutputChannel("GDriveSync");
+  context.subscriptions.push(outputChannel);
+  const imageEnrichmentService = new ImageEnrichmentService(
+    path.join(context.globalStorageUri.fsPath, "image-enrichment"),
+    path.join(context.extensionPath, "resources", "appleVisionOcr.swift")
+  );
+  const syncManager = new SyncManager(authManager, driveClient, manifestStore, new SlidesClient(), imageEnrichmentService, {
+    info(message: string) {
+      outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+    }
+  });
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const codeLensEmitter = new vscode.EventEmitter<void>();
 
@@ -939,6 +950,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         event.affectsConfiguration("gdocSync.showStatusBar") ||
         event.affectsConfiguration("gdocSync.syncOnOpenDefault") ||
         event.affectsConfiguration("gdocSync.unlinkOnMarkdownDelete") ||
+        event.affectsConfiguration("gdocSync.imageEnrichment.mode") ||
+        event.affectsConfiguration("gdocSync.imageEnrichment.provider") ||
+        event.affectsConfiguration("gdocSync.imageEnrichment.store") ||
+        event.affectsConfiguration("gdocSync.imageEnrichment.onlyWhenAltGeneric") ||
         event.affectsConfiguration("gdocSync.development.desktopClientId") ||
         event.affectsConfiguration("gdocSync.development.desktopClientSecret") ||
         event.affectsConfiguration("gdocSync.development.hostedBaseUrl")

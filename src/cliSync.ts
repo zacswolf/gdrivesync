@@ -10,6 +10,7 @@ import { convertPresentationToMarp } from "./presentationConverter";
 import { convertSlidesApiPresentationToMarp } from "./slidesApiPresentationConverter";
 import { SlidesClient } from "./slidesClient";
 import { getSyncProfile, getSyncProfilesForTargetFamily, resolveSyncProfileForMimeType } from "./syncProfiles";
+import { ImageEnrichmentService, ImageEnrichmentSettings } from "./imageEnrichment";
 import {
   ConnectedGoogleAccount,
   GeneratedFilePayload,
@@ -35,6 +36,8 @@ interface TrackedOutputState {
 interface CliSyncOptions {
   force?: boolean;
   accountId?: string;
+  imageEnrichmentSettings?: ImageEnrichmentSettings;
+  progress?: (message: string) => void;
 }
 
 export interface CliFailedSyncOutcome {
@@ -64,6 +67,8 @@ export interface CliExportResult {
 interface CliExportOptions {
   targetPath?: string;
   includePresentationBackgrounds?: boolean;
+  imageEnrichmentSettings?: ImageEnrichmentSettings;
+  progress?: (message: string) => void;
 }
 
 export class CliSyncManager {
@@ -71,7 +76,8 @@ export class CliSyncManager {
     private readonly authManager: GoogleAuthManager,
     private readonly driveClient: DriveClient,
     private readonly manifestStore: CliManifestStore,
-    private readonly slidesClient: SlidesClient
+    private readonly slidesClient: SlidesClient,
+    private readonly imageEnrichmentService: ImageEnrichmentService
   ) {}
 
   getAllowedProfilesForTargetPath(targetPath: string) {
@@ -163,7 +169,14 @@ export class CliSyncManager {
     for (const linkedFile of linkedFiles) {
       let outcome: CliSyncOutcome;
       try {
-        outcome = await this.syncFile(linkedFile.filePath, options);
+        const scopedOptions =
+          options.progress
+            ? {
+                ...options,
+                progress: (message: string) => options.progress?.(`${results.length + 1}/${linkedFiles.length}: ${path.basename(linkedFile.filePath)} — ${message}`)
+              }
+            : options;
+        outcome = await this.syncFile(linkedFile.filePath, scopedOptions);
       } catch (error) {
         failedCount += 1;
         outcome = {
@@ -280,26 +293,31 @@ export class CliSyncManager {
             exportMarkdownPath,
             await this.fetchSourceMarkdown(accessToken, selection.fileId, selection.resourceKey, profile)
           );
+    const enrichedMarkdownResult = await this.maybeApplyImageEnrichment(
+      markdownResult,
+      options.imageEnrichmentSettings,
+      options.progress
+    );
     if (!options?.targetPath) {
       return {
         outputKind: "file",
         message: `Exported ${metadata.name} to stdout.`,
-        primaryText: markdownResult.markdown,
+        primaryText: enrichedMarkdownResult.markdown,
         writtenPaths: []
       };
     }
 
     const targetPath = options.targetPath;
-    await this.syncGeneratedFiles(targetPath, undefined, markdownResult.assets);
-    await this.writeTextFile(targetPath, markdownResult.markdown);
+    await this.syncGeneratedFiles(targetPath, undefined, enrichedMarkdownResult.assets);
+    await this.writeTextFile(targetPath, enrichedMarkdownResult.markdown);
     return {
-      targetPath,
-      outputKind: "file",
-      message: `Exported ${metadata.name} to ${path.basename(targetPath)}.`,
-      primaryText: markdownResult.markdown,
-      writtenPaths: [
         targetPath,
-        ...markdownResult.assets.map((asset) => path.join(path.dirname(targetPath), ...asset.relativePath.split("/")))
+        outputKind: "file",
+        message: this.buildExportMessage(`Exported ${metadata.name} to ${path.basename(targetPath)}.`, enrichedMarkdownResult.stats),
+        primaryText: enrichedMarkdownResult.markdown,
+        writtenPaths: [
+        targetPath,
+        ...enrichedMarkdownResult.assets.map((asset) => path.join(path.dirname(targetPath), ...asset.relativePath.split("/")))
       ]
     };
   }
@@ -353,9 +371,14 @@ export class CliSyncManager {
             profile,
             metadata.name
           );
-    await this.syncGeneratedFiles(baseTargetPath, this.getTrackedGeneratedFilePaths(linkedFile.entry), preparedContent.assets);
-    await this.writeTextFile(baseTargetPath, preparedContent.markdown);
-    const nextHash = sha256Text(preparedContent.markdown);
+    const enrichedContent = await this.maybeApplyImageEnrichment(
+      preparedContent,
+      options.imageEnrichmentSettings,
+      options.progress
+    );
+    await this.syncGeneratedFiles(baseTargetPath, this.getTrackedGeneratedFilePaths(linkedFile.entry), enrichedContent.assets);
+    await this.writeTextFile(baseTargetPath, enrichedContent.markdown);
+    const nextHash = sha256Text(enrichedContent.markdown);
     await this.manifestStore.updateLinkedFile(baseTargetPath, (entry) => ({
       ...entry,
       outputKind: "file",
@@ -365,7 +388,7 @@ export class CliSyncManager {
       sourceUrl: metadata.webViewLink || profile.buildSourceUrl(metadata.id),
       sourceMimeType: metadata.mimeType,
       resourceKey: metadata.resourceKey || entry.resourceKey,
-      generatedFiles: preparedContent.assets.map((asset) => ({
+      generatedFiles: enrichedContent.assets.map((asset) => ({
         relativePath: asset.relativePath,
         contentHash: asset.contentHash
       })),
@@ -377,10 +400,67 @@ export class CliSyncManager {
     return {
       status: "synced",
       message: rebound
-        ? `Synced ${path.basename(baseTargetPath)} and rebound it to ${account.accountEmail || account.accountId}.`
-        : `Synced ${path.basename(baseTargetPath)}.`,
+        ? `${this.buildMarkdownSyncMessage(path.basename(baseTargetPath), enrichedContent.stats)} Rebound it to ${account.accountEmail || account.accountId}.`
+        : this.buildMarkdownSyncMessage(path.basename(baseTargetPath), enrichedContent.stats),
       rebind: rebound
     };
+  }
+
+  private async maybeApplyImageEnrichment(
+    preparedContent: { markdown: string; assets: GeneratedFilePayload[] },
+    imageEnrichmentSettings: ImageEnrichmentSettings | undefined,
+    progress?: (message: string) => void
+  ): Promise<{ markdown: string; assets: GeneratedFilePayload[]; stats?: { enrichedImageCount: number; provider?: string } }> {
+    if (!imageEnrichmentSettings || imageEnrichmentSettings.mode !== "local") {
+      return {
+        ...preparedContent
+      };
+    }
+
+    const enrichedResult = await this.imageEnrichmentService.enrichMarkdown(
+      preparedContent.markdown,
+      preparedContent.assets,
+      imageEnrichmentSettings,
+      progress
+        ? {
+            report(message: string) {
+              progress(message);
+            }
+          }
+        : undefined
+    );
+    return {
+      markdown: enrichedResult.markdown,
+      assets: preparedContent.assets,
+      stats: {
+        enrichedImageCount: enrichedResult.stats.enrichedImageCount,
+        provider: enrichedResult.stats.provider
+      }
+    };
+  }
+
+  private buildMarkdownSyncMessage(
+    fileName: string,
+    enrichmentStats?: { enrichedImageCount: number; provider?: string }
+  ): string {
+    if (!enrichmentStats?.enrichedImageCount) {
+      return `Synced ${fileName}.`;
+    }
+
+    const providerLabel = enrichmentStats.provider ? ` using ${enrichmentStats.provider}` : "";
+    return `Synced ${fileName} and enriched ${enrichmentStats.enrichedImageCount} image${enrichmentStats.enrichedImageCount === 1 ? "" : "s"}${providerLabel}.`;
+  }
+
+  private buildExportMessage(
+    baseMessage: string,
+    enrichmentStats?: { enrichedImageCount: number; provider?: string }
+  ): string {
+    if (!enrichmentStats?.enrichedImageCount) {
+      return baseMessage;
+    }
+
+    const providerLabel = enrichmentStats.provider ? ` using ${enrichmentStats.provider}` : "";
+    return `${baseMessage} Enriched ${enrichmentStats.enrichedImageCount} image${enrichmentStats.enrichedImageCount === 1 ? "" : "s"}${providerLabel}.`;
   }
 
   private async doSpreadsheetSync(
