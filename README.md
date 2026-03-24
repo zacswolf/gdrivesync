@@ -1,4 +1,4 @@
-# GDriveSync for VS Code
+# GDriveSync
 
 GDriveSync is a Google Drive to local-file bridge for humans and agents.
 
@@ -32,7 +32,7 @@ Agent-friendly qualities:
 
 ## What is implemented
 
-- Desktop VS Code extension scaffold in TypeScript
+- VS Code extension in TypeScript
 - Google OAuth desktop flow with PKCE and VS Code `SecretStorage`
 - Desktop OAuth uses a localhost loopback callback inside the extension
 - Google Docs export to `.docx` and local DOCX -> Markdown conversion for higher-resolution images
@@ -43,7 +43,7 @@ Agent-friendly qualities:
 - Google Sheets export to `.xlsx` and local `.csv` generation
 - Drive-hosted `.xlsx` download and local `.csv` generation
 - Workspace sidecar manifest in `.gdrivesync.json`
-- Commands for connecting accounts, linking, importing, syncing, auto-sync toggle, unlinking, and disconnecting accounts
+- Commands for connecting accounts, switching the default account, linking, importing, syncing, auto-sync toggle, unlinking, and disconnecting accounts
 - Progress notifications for manual import and sync flows in the VS Code extension
 - Status bar, CodeLens, and editor/explorer command contributions for linked Markdown and CSV files
 - Static site assets for Cloudflare Pages, including homepage, privacy policy, bridge page, and Picker page
@@ -351,12 +351,11 @@ Planned distribution targets:
 - Open VSX
 - Homebrew
 
-Publishing a short best-practices doc for agent usage is not dumb at all. It is probably a very good idea once the CLI surface settles a bit, because that is how other agent builders will actually discover the right workflows.
+The CLI is intended to be a real integration surface for agent builders, not just a local developer helper.
 
 ## Current limitations
 
 - One-way sync only: Google files -> local Markdown, Marp Markdown, or CSV
-- The extension now uses `drive.readonly` for one-way sync, so existing local sessions may need a one-time reconnect after upgrades
 - The hosted Picker fallback is still used as a backup if direct pasted-link access fails
 - Formatting fidelity depends on local DOCX conversion for native Docs and Word files, local presentation parsing for Slides/PPTX, and local workbook parsing for Sheets/XLSX
 - Presentation sync targets Marp-flavored Markdown and focuses on slide text plus extracted images rather than full visual layout fidelity
