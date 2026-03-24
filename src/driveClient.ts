@@ -2,6 +2,11 @@ import { DriveFileMetadata, DriveUserInfo } from "./types";
 
 type FetchLike = typeof fetch;
 
+interface ParsedDriveErrorDetails {
+  message?: string;
+  reason?: string;
+}
+
 export class GoogleApiError extends Error {
   constructor(
     message: string,
@@ -114,16 +119,48 @@ export class DriveClient {
     return new Uint8Array(await response.arrayBuffer());
   }
 
+  private parseDriveErrorDetails(details: string): ParsedDriveErrorDetails {
+    try {
+      const payload = JSON.parse(details) as {
+        error?: {
+          message?: string;
+          errors?: Array<{ reason?: string }>;
+        };
+      };
+      return {
+        message: payload.error?.message,
+        reason: payload.error?.errors?.[0]?.reason
+      };
+    } catch {
+      return {};
+    }
+  }
+
   private async throwDriveError(response: Response, fileId: string): Promise<never> {
     const details = await response.text();
-    if (response.status === 403 || response.status === 404) {
-      throw new PickerGrantRequiredError(
-        `The current Google session cannot access Google file ${fileId}. Share it with this account or sign in with a Google account that can read it.`,
+    const parsedDetails = this.parseDriveErrorDetails(details);
+    if (parsedDetails.reason === "exportSizeLimitExceeded") {
+      throw new GoogleApiError(
+        parsedDetails.message || "This Google Workspace file is too large to export.",
         response.status,
         details
       );
     }
 
-    throw new GoogleApiError(`Google Drive request failed with status ${response.status}.`, response.status, details);
+    if (response.status === 403 || response.status === 404) {
+      throw new PickerGrantRequiredError(
+        parsedDetails.message
+          ? `${parsedDetails.message} (file ${fileId})`
+          : `The current Google session cannot access Google file ${fileId}. Share it with this account or sign in with a Google account that can read it.`,
+        response.status,
+        details
+      );
+    }
+
+    throw new GoogleApiError(
+      parsedDetails.message || `Google Drive request failed with status ${response.status}.`,
+      response.status,
+      details
+    );
   }
 }

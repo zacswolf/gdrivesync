@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DriveClient, PickerGrantRequiredError } from "../../src/driveClient";
+import { DriveClient, GoogleApiError, PickerGrantRequiredError } from "../../src/driveClient";
 
 function mockResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(typeof body === "string" ? body : JSON.stringify(body), {
@@ -71,6 +71,31 @@ describe("DriveClient", () => {
     await expect(client.exportFile("token", "doc-1", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")).resolves.toEqual(
       Uint8Array.from(Buffer.from("Hello"))
     );
+  });
+
+  it("surfaces export size limit errors as drive API errors instead of access errors", async () => {
+    const client = new DriveClient(async () =>
+      mockResponse(
+        {
+          error: {
+            code: 403,
+            message: "This file is too large to be exported.",
+            errors: [{ reason: "exportSizeLimitExceeded" }]
+          }
+        },
+        { status: 403 }
+      )
+    );
+
+    await expect(client.exportFile("token", "doc-1", "application/vnd.openxmlformats-officedocument.presentationml.presentation")).rejects.toBeInstanceOf(
+      GoogleApiError
+    );
+    await expect(client.exportFile("token", "doc-1", "application/vnd.openxmlformats-officedocument.presentationml.presentation")).rejects.not.toBeInstanceOf(
+      PickerGrantRequiredError
+    );
+    await expect(client.exportFile("token", "doc-1", "application/vnd.openxmlformats-officedocument.presentationml.presentation")).rejects.toMatchObject({
+      message: "This file is too large to be exported."
+    });
   });
 
   it("downloads blob files as bytes", async () => {
