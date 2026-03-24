@@ -296,8 +296,10 @@
   "scripts": {
     "compile": "tsc -p .",
     "watch": "tsc -w -p .",
-    "test": "npm run test:unit && npm run test:extension",
-    "test:unit": "vitest run",
+    "test": "npm run test:unit && npm run test:cli && npm run test:extension",
+    "test:unit": "vitest run test/unit",
+    "pretest:cli": "npm run compile",
+    "test:cli": "vitest run test/integration",
     "pretest:extension": "npm run compile",
     "test:extension": "node ./dist/test/runTest.js",
     "cli": "tsx src/cli.ts"
