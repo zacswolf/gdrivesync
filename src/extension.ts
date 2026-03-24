@@ -557,7 +557,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await ensureDesktopConfig();
         await authManager.signIn();
         await refreshUi();
-        void vscode.window.showInformationMessage("GDriveSync is now signed in.");
+        const connectedAccountEmail = await getConnectedAccountEmail();
+        void vscode.window.showInformationMessage(
+          connectedAccountEmail ? `GDriveSync is now signed in as ${connectedAccountEmail}.` : "GDriveSync is now signed in."
+        );
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }

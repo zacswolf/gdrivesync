@@ -4,7 +4,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 import { convertDocxToMarkdown } from "./docxConverter";
-import { DriveClient } from "./driveClient";
+import { DriveClient, PickerGrantRequiredError } from "./driveClient";
 import { GoogleAuthManager } from "./googleAuth";
 import { ManifestStore } from "./manifestStore";
 import { LocalFileState, needsOverwriteConfirmation } from "./overwritePolicy";
@@ -59,7 +59,12 @@ export class SyncManager {
       lastLocalHash: undefined,
       lastSyncedAt: undefined
     });
-    return this.syncFile(fileUri, { reason: "link" });
+    try {
+      return await this.syncFile(fileUri, { reason: "link" });
+    } catch (error) {
+      await this.manifestStore.unlinkFile(fileUri);
+      throw error;
+    }
   }
 
   async toggleSyncOnOpen(fileUri: vscode.Uri): Promise<boolean> {
@@ -170,12 +175,7 @@ export class SyncManager {
     const profile = getSyncProfile(linkedFile.entry.profileId);
     const accessToken = await this.authManager.getAccessToken();
     const baseTargetUri = this.getBaseTargetUri(linkedFile);
-    const metadata = await this.driveClient.getFileMetadata(accessToken, {
-      fileId: linkedFile.entry.fileId,
-      resourceKey: linkedFile.entry.resourceKey,
-      expectedMimeTypes: [linkedFile.entry.sourceMimeType],
-      sourceTypeLabel: profile.sourceTypeLabel
-    });
+    const metadata = await this.readLinkedFileMetadataWithHelpfulError(accessToken, linkedFile, profile);
 
     if (profile.targetFamily === "csv") {
       return this.doSpreadsheetSync(baseTargetUri, linkedFile, profile, metadata, accessToken, options);
@@ -255,6 +255,28 @@ export class SyncManager {
       status: "synced",
       message: `Synced ${path.basename(baseTargetUri.fsPath)}.`
     };
+  }
+
+  private async readLinkedFileMetadataWithHelpfulError(accessToken: string, linkedFile: LinkedFileContext, profile: SyncProfile) {
+    try {
+      return await this.driveClient.getFileMetadata(accessToken, {
+        fileId: linkedFile.entry.fileId,
+        resourceKey: linkedFile.entry.resourceKey,
+        expectedMimeTypes: [linkedFile.entry.sourceMimeType],
+        sourceTypeLabel: profile.sourceTypeLabel
+      });
+    } catch (error) {
+      if (error instanceof PickerGrantRequiredError) {
+        const currentUser = await this.driveClient.getCurrentUser(accessToken);
+        if (currentUser?.emailAddress) {
+          throw new Error(
+            `The connected Google account (${currentUser.emailAddress}) cannot read file ${linkedFile.entry.fileId} through the Drive API. If this is a shared-link file, it may still need a resource key; otherwise sign out and sign back in with the account that can read it.`
+          );
+        }
+      }
+
+      throw error;
+    }
   }
 
   private async doSpreadsheetSync(

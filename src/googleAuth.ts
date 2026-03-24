@@ -31,6 +31,9 @@ function buildAuthorizationUrl(config: GoogleReleaseConfig, codeChallenge: strin
   url.searchParams.set("code_challenge", codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set("state", state);
+  if (config.loginHint) {
+    url.searchParams.set("login_hint", config.loginHint);
+  }
   return url.toString();
 }
 
