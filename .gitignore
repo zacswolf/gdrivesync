@@ -10,3 +10,4 @@ coverage
 .DS_Store
 data/
 .tmp*
+docs/private/

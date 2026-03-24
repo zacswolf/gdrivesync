@@ -2,6 +2,8 @@
 
 This guide is for local development, your own Google Cloud project, and your own hosted picker site.
 
+For generic public-release steps, use [docs/release-checklist.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/release-checklist.md). Keep personal production details in a private, gitignored maintainer notes file instead of this guide.
+
 ## Local quickstart
 
 1. Install dependencies:
@@ -68,6 +70,11 @@ Recommended consent screen setup:
 - privacy policy: your deployed public privacy page
 - authorized domain: the domain that serves your hosted picker site
 
+If your Google OAuth consent screen is still in `Testing` for an external app:
+
+- only explicitly added test users can authorize it
+- refresh tokens can expire after 7 days, so long-lived auth behavior is not representative of a published app
+
 The extension needs the desktop client ID and secret.
 
 The hosted site needs:
@@ -90,7 +97,7 @@ Required routes:
 - `/privacy`
 - `/picker`
 
-No Worker is required for v1.
+No Worker is required for the current static-site deployment.
 
 ## Cloudflare Pages deployment
 

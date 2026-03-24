@@ -60,10 +60,13 @@ Agent-friendly qualities:
 - `site/public/` static site assets for Cloudflare Pages
 - `test/unit/` Vitest unit coverage for parsing, hashing, manifest validation, and sync policy
 - `docs/development.md` local development, Google Cloud setup, and hosted-site deployment notes
+- `docs/release-checklist.md` generic release steps for publishing and launch prep
 
 ## Development
 
 For local setup, your own Google Cloud project, and your own hosted picker site, see [docs/development.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/development.md).
+
+For generic public-release prep, see [docs/release-checklist.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/release-checklist.md).
 
 Quick local loop:
 
@@ -394,7 +397,7 @@ The CLI is intended to be a real integration surface for agent builders, not jus
 - Formatting fidelity depends on local DOCX conversion for native Docs and Word files, local presentation parsing for Slides/PPTX, and local workbook parsing for Sheets/XLSX
 - Presentation sync targets Marp-flavored Markdown and focuses on slide text plus extracted images rather than full visual layout fidelity
 - Very large native Google Slides decks may bypass Drive export and use the Google Slides API fallback automatically
-- Spreadsheet sync only supports native Google Sheets and `.xlsx` in v1
+- Spreadsheet sync only supports native Google Sheets and `.xlsx`
 - Cloud image enrichment is explicit and opt-in; it requires user-supplied OpenAI or Anthropic credentials
 - Apple Vision enrichment requires macOS plus local Swift compiler availability; otherwise GDriveSync falls back to Tesseract when installed
 - Linked files must live inside an open VS Code workspace folder
