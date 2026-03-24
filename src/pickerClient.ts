@@ -18,6 +18,13 @@ export class PickerClient {
   constructor(private readonly configProvider: () => GoogleReleaseConfig) {}
 
   async pickDocument(requestOptions: PickerRequestOptions, initialFile?: ParsedDocInput): Promise<ResolvedGoogleFile | undefined> {
+    const hostedBaseUrl = this.configProvider().hostedBaseUrl;
+    if (!hostedBaseUrl) {
+      throw new Error(
+        "Hosted Google Picker is not configured. Set GDRIVESYNC_HOSTED_BASE_URL or gdocSync.development.hostedBaseUrl to use picker-based selection."
+      );
+    }
+
     const callbackServer = await createLocalCallbackServer(
       "/picker/callback",
       `${requestOptions.sourceTypeLabel} selected`,
@@ -34,7 +41,7 @@ export class PickerClient {
       resourceKey: initialFile?.resourceKey,
       loginHint: requestOptions.loginHint || this.configProvider().loginHint
     });
-    const pickerUrl = new URL(this.configProvider().pickerUrl);
+    const pickerUrl = new URL(`${hostedBaseUrl}/picker`);
     pickerUrl.hash = new URLSearchParams({ request }).toString();
     const opened = await vscode.env.openExternal(vscode.Uri.parse(pickerUrl.toString()));
     if (!opened) {

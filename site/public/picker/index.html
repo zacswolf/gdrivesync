@@ -144,7 +144,7 @@
       }
 
       function validateSiteConfig() {
-        const config = window.GDOCSYNC_SITE_CONFIG || {};
+        const config = window.GDRIVESYNC_SITE_CONFIG || {};
         const missingValues = [];
         if (!config.googleWebClientId || config.googleWebClientId.includes("REPLACE_")) {
           missingValues.push("googleWebClientId");

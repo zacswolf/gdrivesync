@@ -4,9 +4,9 @@ node_modules
 .wrangler
 .env
 .env.*
+!.env.example
 coverage
 *.log
 .DS_Store
-.gdocsync-dev-session.json
-.gdocsync.json
 data/
+.tmp*

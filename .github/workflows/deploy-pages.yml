@@ -26,9 +26,9 @@ jobs:
       - name: Prepare site config
         run: |
           cat > site/public/site-config.js <<'EOF'
-          window.GDOCSYNC_SITE_CONFIG = {
+          window.GDRIVESYNC_SITE_CONFIG = {
             googleWebClientId: "532481685126-mulp97i1h0v0i20im0mhgilt4em8f15b.apps.googleusercontent.com",
-            googleApiKey: "${{ secrets.GDOCSYNC_PICKER_API_KEY }}",
+            googleApiKey: "${{ secrets.GDRIVESYNC_PICKER_API_KEY }}",
             googleProjectNumber: "532481685126"
           };
           EOF

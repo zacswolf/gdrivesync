@@ -31,7 +31,7 @@ function willExpireSoon(session: StoredOAuthSession): boolean {
 
 function formatTokenError(status: number, details: string, missingClientSecretHint: boolean): string {
   if (missingClientSecretHint && details.includes('"client_secret is missing"')) {
-    return "Google token exchange failed: set gdocSync.development.desktopClientSecret in your local user settings and try sign-in again.";
+    return "Google token exchange failed: set gdocSync.development.desktopClientSecret in your local user settings or GDRIVESYNC_DESKTOP_CLIENT_SECRET in your environment and try sign-in again.";
   }
 
   return `Google token exchange failed (${status}): ${details}`;

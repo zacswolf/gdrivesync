@@ -1,5 +1,5 @@
 {
-  "name": "gdrivesync-vscode-extension",
+  "name": "gdrivesync",
   "displayName": "GDriveSync",
   "description": "Google Drive to Markdown, Marp, or CSV sync for VS Code and agent-friendly CLI workflows.",
   "version": "0.1.0",
@@ -249,12 +249,12 @@
         "gdocSync.development.hostedBaseUrl": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Optional override for the hosted site origin used for the OAuth bridge and Google Picker during development."
+          "markdownDescription": "Optional override for the hosted site origin used for Google Picker and hosted link-share recovery during development. Normal desktop sign-in still uses the extension's localhost callback."
         },
         "gdocSync.development.loginHint": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Optional Google account email hint to reduce repeated account selection in the hosted picker during development."
+          "markdownDescription": "Optional Google account email hint to reduce repeated account selection in hosted picker flows during development."
         }
       }
     }

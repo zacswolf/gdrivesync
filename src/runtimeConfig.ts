@@ -3,7 +3,6 @@ import path from "node:path";
 
 import { GoogleReleaseConfig } from "./types";
 
-const DEFAULT_HOSTED_BASE_URL = "https://gdrivesync.zacswolf.com";
 const DEFAULT_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
 const DEFAULT_DESKTOP_CLIENT_ID = "532481685126-bjdbo5o6924bh41314la7s6ph4n02s62.apps.googleusercontent.com";
 
@@ -64,8 +63,11 @@ export async function loadDevelopmentEnv(basePath: string): Promise<void> {
   await loadDotEnvFile(path.join(basePath, ".env.local"), loadedKeys);
 }
 
-function normalizeBaseUrl(rawValue: string | undefined): string {
-  const candidate = rawValue?.trim() || DEFAULT_HOSTED_BASE_URL;
+function normalizeBaseUrl(rawValue: string | undefined): string | undefined {
+  const candidate = rawValue?.trim();
+  if (!candidate) {
+    return undefined;
+  }
   const url = new URL(candidate);
   url.pathname = "";
   url.search = "";
@@ -81,26 +83,24 @@ interface GoogleConfigValueOverrides {
 }
 
 export function resolveGoogleConfigFromValues(overrides: GoogleConfigValueOverrides = {}): GoogleReleaseConfig {
-  const desktopClientId = overrides.desktopClientId || process.env.GDOCSYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID;
-  const hostedBaseUrlOverride = overrides.hostedBaseUrl || process.env.GDOCSYNC_HOSTED_BASE_URL || DEFAULT_HOSTED_BASE_URL;
+  const desktopClientId = overrides.desktopClientId || process.env.GDRIVESYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID;
+  const hostedBaseUrlOverride = overrides.hostedBaseUrl || process.env.GDRIVESYNC_HOSTED_BASE_URL;
   const hostedBaseUrl = normalizeBaseUrl(hostedBaseUrlOverride);
   return {
     desktopClientId: desktopClientId.trim() || DEFAULT_DESKTOP_CLIENT_ID,
-    desktopClientSecret: overrides.desktopClientSecret?.trim() || process.env.GDOCSYNC_DESKTOP_CLIENT_SECRET || undefined,
+    desktopClientSecret: overrides.desktopClientSecret?.trim() || process.env.GDRIVESYNC_DESKTOP_CLIENT_SECRET || undefined,
     hostedBaseUrl,
-    oauthBridgeUrl: `${hostedBaseUrl}/oauth/google/bridge`,
-    pickerUrl: `${hostedBaseUrl}/picker`,
     scope: DEFAULT_SCOPE,
-    loginHint: overrides.loginHint?.trim() || process.env.GDOCSYNC_LOGIN_HINT || undefined
+    loginHint: overrides.loginHint?.trim() || process.env.GDRIVESYNC_LOGIN_HINT || undefined
   };
 }
 
 export function resolveCliGoogleConfig(env: NodeJS.ProcessEnv = process.env): GoogleReleaseConfig {
   return resolveGoogleConfigFromValues({
-    desktopClientId: env.GDOCSYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID,
-    hostedBaseUrl: env.GDOCSYNC_HOSTED_BASE_URL,
-    desktopClientSecret: env.GDOCSYNC_DESKTOP_CLIENT_SECRET,
-    loginHint: env.GDOCSYNC_LOGIN_HINT
+    desktopClientId: env.GDRIVESYNC_DESKTOP_CLIENT_ID || DEFAULT_DESKTOP_CLIENT_ID,
+    hostedBaseUrl: env.GDRIVESYNC_HOSTED_BASE_URL,
+    desktopClientSecret: env.GDRIVESYNC_DESKTOP_CLIENT_SECRET,
+    loginHint: env.GDRIVESYNC_LOGIN_HINT
   });
 }
 

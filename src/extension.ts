@@ -131,6 +131,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   const codeLensEmitter = new vscode.EventEmitter<void>();
 
+  function logInfo(message: string): void {
+    outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+  }
+
+  function logError(contextMessage: string, error: unknown): void {
+    const detail = error instanceof Error ? error.stack || error.message : String(error);
+    outputChannel.appendLine(`[${new Date().toISOString()}] ERROR: ${contextMessage}`);
+    outputChannel.appendLine(detail);
+  }
+
+  async function runLoggedCommand<T>(commandName: string, task: () => Promise<T>): Promise<T> {
+    logInfo(`Command ${commandName} started.`);
+    try {
+      const result = await task();
+      logInfo(`Command ${commandName} completed.`);
+      return result;
+    } catch (error) {
+      logError(`Command ${commandName} failed.`, error);
+      outputChannel.show(true);
+      throw error;
+    }
+  }
+
+  const initialRuntimeConfig = resolveExtensionGoogleConfig();
+  logInfo(
+    `Activated. Hosted picker origin: ${initialRuntimeConfig.hostedBaseUrl || "not configured"}.`
+  );
+
   function getProfilesForTargetUri(targetUri?: vscode.Uri) {
     if (isMarkdownUri(targetUri)) {
       return getSyncProfilesForTargetFamily("markdown");
@@ -245,10 +273,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
 
     if (selection === "connect-another") {
+      logInfo("Picker requested a newly connected Google account.");
       const connectedAccount = await authManager.connectAccount();
       return connectedAccount;
     }
 
+    if (selection && typeof selection !== "string") {
+      logInfo(`Picker will use ${formatAccountLabel(selection)}.`);
+    }
     return typeof selection === "string" ? undefined : selection;
   }
 
@@ -410,6 +442,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     for (const account of candidateAccounts) {
       try {
+        logInfo(`Trying pasted Google file ${parsedInput.fileId} with ${formatAccountLabel(account)}.`);
         const { accessToken } = await authManager.getAccessToken(account.accountId);
         const metadata = await driveClient.getFileMetadata(accessToken, {
           fileId: parsedInput.fileId,
@@ -435,6 +468,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         };
       } catch (error) {
         lastError = error;
+        logInfo(
+          `Connected account ${formatAccountLabel(account)} could not resolve file ${parsedInput.fileId}: ${sanitizeError(error)}`
+        );
         if (!shouldTryAnotherAccount(error)) {
           throw error;
         }
@@ -468,8 +504,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (selectionMode.label === "Select from Google Drive") {
+      logInfo("Selection flow: hosted Google Picker.");
       const pickerAccount = await chooseAccountForPicker();
       if (!pickerAccount) {
+        logInfo("Google Picker selection cancelled before account choice completed.");
         return undefined;
       }
 
@@ -480,8 +518,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       );
       if (!pickedFile) {
+        logInfo("Google Picker closed without a file selection.");
         return undefined;
       }
+      logInfo(`Google Picker selected file ${pickedFile.fileId}.`);
 
       const normalizedSelection = normalizeResolvedGoogleFileSelection(
         pickedFile,
@@ -505,18 +545,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const parsedInput = await promptForGoogleFileInput();
     if (!parsedInput) {
+      logInfo("Selection flow: pasted Google file input cancelled.");
       return undefined;
     }
+    logInfo(`Selection flow: pasted Google file input for ${parsedInput.fileId}.`);
 
     try {
       return await resolveSelectionFromInput(parsedInput, allowedProfiles);
     } catch (error) {
       if (shouldRecoverAccessWithPicker(parsedInput, error)) {
+        logInfo(`Pasted input ${parsedInput.fileId} needs picker recovery.`);
         void vscode.window.showInformationMessage(
           `That shared Google file may need extra link access details. Opening Google Picker to recover them…`
         );
         const pickerAccount = await chooseAccountForPicker();
         if (!pickerAccount) {
+          logInfo("Picker recovery cancelled before account choice completed.");
           return undefined;
         }
         const pickedFile = await pickerClient.pickDocument(
@@ -527,8 +571,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           parsedInput
         );
         if (!pickedFile) {
+          logInfo("Picker recovery closed without a file selection.");
           return undefined;
         }
+        logInfo(`Picker recovery selected file ${pickedFile.fileId}.`);
         const normalizedSelection = normalizeResolvedGoogleFileSelection(
           pickedFile,
           allowedProfiles,
@@ -560,6 +606,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   async function linkLocalFile(targetUri?: vscode.Uri): Promise<void> {
     await ensureConnectedAccount();
     const localFileUri = getTargetLocalFileUri(targetUri);
+    logInfo(`Linking local file ${localFileUri.fsPath}.`);
     const existingLink = await manifestStore.getLinkedFile(localFileUri);
     if (existingLink?.matchedOutputKind === "generated") {
       throw new Error("This file is generated from a linked spreadsheet. Link the base CSV file instead.");
@@ -573,6 +620,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const outcome = await withSyncProgress("Linking Google file…", (progress) =>
       syncManager.linkFile(localFileUri, selection, { progress })
     );
+    logInfo(`Linked ${localFileUri.fsPath}: ${outcome.message}`);
     await refreshUi();
     await revealCurrentLinkedOutput(localFileUri);
     await showSyncOutcome(outcome);
@@ -608,8 +656,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   async function importGoogleFile(): Promise<void> {
     await ensureConnectedAccount();
+    logInfo("Import Google file flow started.");
     const selection = await selectDocument(getSupportedSyncProfiles());
     if (!selection) {
+      logInfo("Import Google file flow cancelled before selection.");
       return;
     }
 
@@ -644,6 +694,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const outcome = await withSyncProgress(`Importing ${resolvedProfile.sourceTypeLabel}…`, (progress) =>
       syncManager.linkFile(targetUri, selection, { progress })
     );
+    logInfo(`Imported ${selection.fileId} to ${targetUri.fsPath}: ${outcome.message}`);
     await openImportedOutput(targetUri);
     await refreshUi();
     await showSyncOutcome(outcome);
@@ -652,11 +703,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   async function syncCurrentFile(targetUri?: vscode.Uri): Promise<void> {
     await ensureConnectedAccount();
     const localFileUri = getTargetLocalFileUri(targetUri);
+    logInfo(`Syncing current file ${localFileUri.fsPath}.`);
     const linkedFile = await manifestStore.getLinkedFile(localFileUri);
     const baseTargetUri = linkedFile ? vscode.Uri.file(fromManifestKey(linkedFile.folderPath, linkedFile.key)) : localFileUri;
     const outcome = await withSyncProgress("Syncing from Google…", (progress) =>
       syncManager.syncFile(localFileUri, { reason: "manual", progress })
     );
+    logInfo(`Sync result for ${localFileUri.fsPath}: ${outcome.message}`);
     await refreshUi();
     await revealCurrentLinkedOutput(localFileUri, baseTargetUri);
     if (outcome.status !== "skipped") {
@@ -668,6 +721,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await ensureTrustedWorkspace();
     const localFileUri = getTargetLocalFileUri(targetUri);
     const enabled = await syncManager.toggleSyncOnOpen(localFileUri);
+    logInfo(`Sync on open for ${localFileUri.fsPath} is now ${enabled ? "enabled" : "disabled"}.`);
     await refreshUi();
     void vscode.window.showInformationMessage(
       enabled ? "Auto-sync on open is now enabled for this linked file." : "Auto-sync on open is now disabled."
@@ -678,6 +732,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await ensureTrustedWorkspace();
     const localFileUri = getTargetLocalFileUri(targetUri);
     const removed = await syncManager.unlinkFile(localFileUri, { removeGeneratedFiles: false });
+    logInfo(`Unlink ${localFileUri.fsPath}: ${removed ? "removed link" : "no link found"}.`);
     await refreshUi();
     if (removed) {
       void vscode.window.showInformationMessage("The file is no longer linked to Google.");
@@ -688,6 +743,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await ensureTrustedWorkspace();
     await ensureDesktopConfig();
     const connectedAccount = await authManager.connectAccount();
+    logInfo(`Connected ${formatAccountLabel(connectedAccount)}.`);
     await refreshUi();
     void vscode.window.showInformationMessage(`Connected ${formatAccountLabel(connectedAccount)}.`);
   }
@@ -699,11 +755,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       includeDisconnectAll: true
     });
     if (!selection) {
+      logInfo("Disconnect Google account cancelled.");
       return;
     }
 
     if (selection === "disconnect-all") {
       const disconnectedCount = await authManager.disconnectAll();
+      logInfo(`Disconnected all Google accounts (${disconnectedCount}).`);
       await refreshUi();
       void vscode.window.showInformationMessage(
         disconnectedCount === 1 ? "Disconnected 1 Google account." : `Disconnected ${disconnectedCount} Google accounts.`
@@ -712,10 +770,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (selection === "connect-another") {
+      logInfo("Disconnect Google account picker returned connect-another; no disconnect performed.");
       return;
     }
 
     const disconnectedAccount = await authManager.disconnectAccount(selection.accountId);
+    if (disconnectedAccount) {
+      logInfo(`Disconnected ${formatAccountLabel(disconnectedAccount)}.`);
+    }
     await refreshUi();
     if (disconnectedAccount) {
       void vscode.window.showInformationMessage(`Disconnected ${formatAccountLabel(disconnectedAccount)}.`);
@@ -728,10 +790,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       title: "Choose the default Google account"
     });
     if (!selection || typeof selection === "string") {
+      logInfo("Switch default Google account cancelled.");
       return;
     }
 
     const account = await authManager.setDefaultAccount(selection.accountId);
+    logInfo(`Default Google account changed to ${formatAccountLabel(account)}.`);
     await refreshUi();
     void vscode.window.showInformationMessage(`Default Google account is now ${formatAccountLabel(account)}.`);
   }
@@ -740,6 +804,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await ensureTrustedWorkspace();
     const accounts = await authManager.listAccounts();
     if (accounts.length === 0) {
+      logInfo("Google Accounts opened with no connected accounts.");
       const selection = await vscode.window.showInformationMessage("No Google accounts are connected yet.", "Connect Account");
       if (selection === "Connect Account") {
         await connectGoogleAccount();
@@ -776,6 +841,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     if (!selection) {
+      logInfo("Google Accounts picker dismissed.");
       return;
     }
 
@@ -829,6 +895,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     if (unlinkedCount > 0) {
+      logInfo(`Auto-unlinked ${unlinkedCount} deleted file${unlinkedCount === 1 ? "" : "s"}.`);
       await refreshUi();
       void vscode.window.setStatusBarMessage(
         unlinkedCount === 1 ? "Unlinked deleted file from Google." : `Unlinked ${unlinkedCount} deleted files from Google.`,
@@ -872,72 +939,77 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("gdocSync.connectGoogleAccount", async () => {
       try {
-        await connectGoogleAccount();
+        await runLoggedCommand("gdocSync.connectGoogleAccount", connectGoogleAccount);
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.disconnectGoogleAccount", async () => {
       try {
-        await disconnectGoogleAccount();
+        await runLoggedCommand("gdocSync.disconnectGoogleAccount", disconnectGoogleAccount);
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.switchDefaultGoogleAccount", async () => {
       try {
-        await switchDefaultGoogleAccount();
+        await runLoggedCommand("gdocSync.switchDefaultGoogleAccount", switchDefaultGoogleAccount);
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.googleAccounts", async () => {
       try {
-        await showGoogleAccounts();
+        await runLoggedCommand("gdocSync.googleAccounts", showGoogleAccounts);
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.linkCurrentFile", async (uri?: vscode.Uri) => {
       try {
-        await linkLocalFile(uri);
+        await runLoggedCommand("gdocSync.linkCurrentFile", () => linkLocalFile(uri));
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.importGoogleDoc", async () => {
       try {
-        await importGoogleFile();
+        await runLoggedCommand("gdocSync.importGoogleDoc", importGoogleFile);
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.syncCurrentFile", async (uri?: vscode.Uri) => {
       try {
-        await syncCurrentFile(uri);
+        await runLoggedCommand("gdocSync.syncCurrentFile", () => syncCurrentFile(uri));
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.syncAll", async () => {
       try {
-        await ensureConnectedAccount();
-        const summary = await withSyncProgress("Syncing all linked files…", (progress) => syncManager.syncAll({ progress }));
-        await showSyncAllOutcome(summary);
+        await runLoggedCommand("gdocSync.syncAll", async () => {
+          await ensureConnectedAccount();
+          const summary = await withSyncProgress("Syncing all linked files…", (progress) => syncManager.syncAll({ progress }));
+          logInfo(
+            `Sync all completed: synced=${summary.syncedCount}, skipped=${summary.skippedCount}, cancelled=${summary.cancelledCount}.`
+          );
+          await showSyncAllOutcome(summary);
+        });
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.toggleSyncOnOpen", async (uri?: vscode.Uri) => {
       try {
-        await toggleSyncOnOpen(uri);
+        await runLoggedCommand("gdocSync.toggleSyncOnOpen", () => toggleSyncOnOpen(uri));
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
     }),
     vscode.commands.registerCommand("gdocSync.unlinkCurrentFile", async (uri?: vscode.Uri) => {
       try {
-        await unlinkCurrentFile(uri);
+        await runLoggedCommand("gdocSync.unlinkCurrentFile", () => unlinkCurrentFile(uri));
       } catch (error) {
         void vscode.window.showErrorMessage(sanitizeError(error));
       }
@@ -956,8 +1028,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         event.affectsConfiguration("gdocSync.imageEnrichment.onlyWhenAltGeneric") ||
         event.affectsConfiguration("gdocSync.development.desktopClientId") ||
         event.affectsConfiguration("gdocSync.development.desktopClientSecret") ||
-        event.affectsConfiguration("gdocSync.development.hostedBaseUrl")
+        event.affectsConfiguration("gdocSync.development.hostedBaseUrl") ||
+        event.affectsConfiguration("gdocSync.development.loginHint")
       ) {
+        logInfo("Relevant extension configuration changed; refreshing UI state.");
         void updateStatusBar();
       }
     }),

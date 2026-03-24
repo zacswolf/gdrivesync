@@ -59,83 +59,29 @@ Agent-friendly qualities:
 - `src/` extension, sync core, and CLI
 - `site/public/` static site assets for Cloudflare Pages
 - `test/unit/` Vitest unit coverage for parsing, hashing, manifest validation, and sync policy
+- `docs/development.md` local development, Google Cloud setup, and hosted-site deployment notes
 
-## Local development
+## Development
 
-1. Install dependencies:
+For local setup, your own Google Cloud project, and your own hosted picker site, see [docs/development.md](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/docs/development.md).
+
+Quick local loop:
 
 ```bash
 npm install
-```
-
-2. Add your Google desktop OAuth config while developing. The easiest path is a local git-ignored `.env` file in the repo root:
-
-```bash
-cp .env.example .env
-```
-
-Then fill in:
-
-- `GDOCSYNC_DESKTOP_CLIENT_ID`
-- `GDOCSYNC_DESKTOP_CLIENT_SECRET`
-- optionally `GDOCSYNC_HOSTED_BASE_URL` for non-production site testing
-
-The extension automatically loads `.env` and `.env.local` from the repo root in development.
-
-You can also set these via:
-
-- VS Code setting: `gdocSync.development.desktopClientId`
-- VS Code setting: `gdocSync.development.desktopClientSecret`
-- Or shell env: `GDOCSYNC_DESKTOP_CLIENT_ID`
-- Or shell env: `GDOCSYNC_DESKTOP_CLIENT_SECRET`
-
-3. If you are testing against a non-production hosted site, also set:
-
-- VS Code setting: `gdocSync.development.hostedBaseUrl`
-- Shell env: `GDOCSYNC_HOSTED_BASE_URL`
-- Or `GDOCSYNC_HOSTED_BASE_URL` in `.env.local`
-
-4. Build and test:
-
-```bash
 npm run compile
 npm test
 ```
 
-5. Launch the extension in VS Code with `F5`.
+The development guide also covers:
+- `GDRIVESYNC_*` environment variables
+- Google Cloud OAuth setup
+- hosted picker and Cloudflare Pages deployment
 
-## Google Cloud setup
-
-Start with one Google Cloud project for both the extension and the hosted picker site. If the app grows and the release workflow gets more complex later, you can split development and production projects at that point.
-
-- Enable Google Drive API
-- Create a desktop OAuth client for the extension
-- Create a web OAuth client for the hosted picker page
-- Configure the consent screen homepage as `https://gdrivesync.zacswolf.com/`
-- Configure the privacy policy as `https://gdrivesync.zacswolf.com/privacy`
-- Verify the authorized domain for `zacswolf.com`
-
-The extension only needs the desktop client ID. The hosted site needs:
-
-- web client ID
-- browser API key
-- Google Cloud project number
-
-Keep [site/public/site-config.js](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public/site-config.js) as a placeholder in git. The production browser API key is injected during GitHub Actions deploys from the `GDOCSYNC_PICKER_API_KEY` secret.
-
-## Cloudflare Pages deployment
-
-Deploy [site/public](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/site/public) as a static site on Cloudflare Pages and bind it to `gdrivesync.zacswolf.com`.
-
-This repo includes a GitHub Actions deploy workflow in [.github/workflows/deploy-pages.yml](/Users/zacschulwolf/Programming/gdocs_sync_vscode_extension/.github/workflows/deploy-pages.yml). Once the Cloudflare Pages project exists and the `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and `GDOCSYNC_PICKER_API_KEY` secrets are set in GitHub, pushes to `main` will redeploy the site automatically.
-
-Required routes:
-
-- `/`
-- `/privacy`
-- `/picker`
-
-No Worker is required for v1.
+Note:
+- desktop sign-in uses the extension's localhost callback and does not need a hosted picker site
+- pasted-link workflows can often work without a hosted picker site
+- picker-based selection and some link-share recovery flows require `GDRIVESYNC_HOSTED_BASE_URL` or `gdocSync.development.hostedBaseUrl`
 
 ## CLI
 

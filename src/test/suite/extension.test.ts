@@ -4,7 +4,7 @@ import * as vscode from "vscode";
 
 suite("GDriveSync extension", () => {
   test("registers the main commands", async () => {
-    const extension = vscode.extensions.getExtension("zacswolf.gdrivesync-vscode-extension");
+    const extension = vscode.extensions.getExtension("zacswolf.gdrivesync");
     assert.ok(extension, "Expected the GDriveSync extension to be available in the test host.");
     await extension.activate();
 

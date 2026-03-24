@@ -58,7 +58,7 @@ export interface CliDoctorReport {
   };
   config: {
     desktopClientConfigured: boolean;
-    hostedBaseUrl: string;
+    hostedBaseUrl?: string;
     scope: string;
   };
   imageEnrichment: {
@@ -476,6 +476,7 @@ export function formatDoctorReport(report: CliDoctorReport): string {
         ? `signed in${report.auth.defaultAccountEmail ? ` as ${report.auth.defaultAccountEmail}` : ""}`
         : "not signed in"
     }`,
+    `Hosted picker: ${report.config.hostedBaseUrl || "not configured"}`,
     `Image enrichment: ${report.imageEnrichment.mode} • Apple Vision ${report.imageEnrichment.appleVision.status} • Tesseract ${report.imageEnrichment.tesseract.available ? "available" : "not found"}`
   ];
 

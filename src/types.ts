@@ -36,9 +36,7 @@ export interface SyncManifest {
 export interface GoogleReleaseConfig {
   desktopClientId: string;
   desktopClientSecret?: string;
-  hostedBaseUrl: string;
-  oauthBridgeUrl: string;
-  pickerUrl: string;
+  hostedBaseUrl?: string;
   scope: string;
   loginHint?: string;
 }
