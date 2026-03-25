@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "site/**"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: release-main
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+      pull-requests: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify project
+        run: xvfb-run -a npm test
+
+      - name: Create or update release PR
+        if: vars.GDRIVESYNC_ENABLE_AUTOMATED_RELEASES != 'true'
+        uses: changesets/action@v1
+        with:
+          commit: "Release"
+          title: "Release"
+          version: npm run changeset:version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release PR or publish
+        if: vars.GDRIVESYNC_ENABLE_AUTOMATED_RELEASES == 'true'
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          commit: "Release"
+          title: "Release"
+          version: npm run changeset:version
+          publish: npm run release:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+      - name: Publish GitHub release
+        if: steps.changesets.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          VSIX_PATH="gdrivesync-${VERSION}.vsix"
+
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" "${VSIX_PATH}" --clobber
+          else
+            gh release create "v${VERSION}" "${VSIX_PATH}" --title "v${VERSION}" --generate-notes
+          fi

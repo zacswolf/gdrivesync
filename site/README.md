@@ -4,6 +4,8 @@ This folder contains the static site assets for Cloudflare Pages.
 
 Deploy [public](public) to your public GDriveSync site origin.
 
+For a local preview, run `npm run site` from the repo root and open `http://127.0.0.1:4173/`.
+
 Before deploy:
 
 1. Leave [site-config.js](public/site-config.js) as a placeholder in git

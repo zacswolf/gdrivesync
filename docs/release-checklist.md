@@ -4,7 +4,7 @@ This checklist is for generic, repeatable release work that belongs in the repo.
 
 Keep personal production details such as exact domains, Google Cloud project IDs, publisher credentials, and secret-management notes in a private gitignored file such as `docs/private/maintainer-release-notes.md`.
 
-## Before tagging a release
+## Before releasing
 
 - make sure the working tree is clean
 - run the full verification pass:
@@ -14,6 +14,16 @@ Keep personal production details such as exact domains, Google Cloud project IDs
   - `npm test`
 - run a manual smoke test from a fresh machine profile or isolated local state
 - confirm README, privacy policy, and marketplace/package metadata still match the current product
+
+## Changesets release flow
+
+- add a changeset to every PR that should affect the next published extension or CLI release
+- do not add a changeset for site-only, docs-only, or internal maintenance changes that should not publish a new product version
+- let Changesets open or update the release PR on `main`
+- review the generated version bump and changelog carefully before merging the release PR
+- keep the repository variable `GDRIVESYNC_ENABLE_AUTOMATED_RELEASES` unset until you are ready for real publishing
+- once Google OAuth, npm trusted publishing, and marketplace secrets are ready, set `GDRIVESYNC_ENABLE_AUTOMATED_RELEASES=true`
+- after that flag is enabled, treat merging the release PR as the point where automated npm and extension publishing can happen
 
 ## Google Cloud and hosted site
 
@@ -29,14 +39,17 @@ Keep personal production details such as exact domains, Google Cloud project IDs
 
 ## Package and versioning
 
-- bump the project version in `package.json` and `package-lock.json`
-- update `CHANGELOG.md`
+- review the Changesets-generated version bump in `package.json` and `package-lock.json`
+- review the Changesets-generated `CHANGELOG.md`
 - keep `.gdrivesync.json` schema versioning separate from package semver
 - only change manifest schema when the persisted manifest format actually changes
 - review the current `xlsx` upstream advisory status, decide whether you still accept that upstream risk for this release, and keep the public docs accurate if it remains unresolved
 
 ## Publish targets
 
+- confirm the release workflow has access to `VSCE_PAT`
+- confirm the release workflow has access to `OVSX_PAT`
+- confirm npm trusted publishing is enabled for this repo
 - publish the VS Code extension
 - publish to Open VSX
 - publish the CLI package to npm

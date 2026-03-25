@@ -294,8 +294,14 @@
     }
   },
   "scripts": {
+    "changeset": "changeset",
+    "changeset:status": "changeset status --verbose",
+    "changeset:version": "changeset version && npm install --package-lock-only",
     "compile": "tsc -p .",
+    "release:publish": "node ./scripts/publish-release.mjs",
+    "release:set-secrets": "node ./scripts/set-github-release-secrets.mjs",
     "watch": "tsc -w -p .",
+    "site": "node ./scripts/serve-site.mjs",
     "test": "npm run test:unit && npm run test:cli && npm run test:extension",
     "test:unit": "vitest run test/unit",
     "pretest:cli": "npm run compile",
@@ -305,13 +311,16 @@
     "cli": "cross-env GDRIVESYNC_LOAD_DEV_ENV=1 tsx src/cli.ts"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.30.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^25.5.0",
     "@types/turndown": "^5.0.6",
     "@types/vscode": "1.105.0",
     "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.7.1",
     "cross-env": "^10.1.0",
     "mocha": "^11.7.5",
+    "ovsx": "^0.10.9",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.1"

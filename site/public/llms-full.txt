@@ -1,0 +1,112 @@
+# GDriveSync
+
+GDriveSync is a VS Code extension and CLI for pulling Google Drive files into local files that are easier for humans, agents, and normal tooling to work with.
+
+## Product summary
+
+GDriveSync links Google Drive files to local outputs and keeps them in sync with a one-way model. The project is intentionally optimized for readable local artifacts instead of collaborative round-trip editing.
+
+Supported flows:
+
+- Google Docs -> Markdown
+- DOCX in Drive -> Markdown
+- Google Slides -> Marp-flavored Markdown
+- PowerPoint in Drive -> Marp-flavored Markdown
+- Google Sheets -> CSV
+- XLSX in Drive -> CSV
+- Image assets are extracted into their own local files when applicable
+
+Google Drive remains the source of truth.
+
+## Why it exists
+
+Many agents still work best through local files and CLIs. GDriveSync provides a clean bridge from Google Drive into local Markdown, CSV, and extracted image assets without relying on brittle browser automation.
+
+Useful qualities:
+
+- OAuth-backed access instead of scraping
+- Stable local file outputs
+- A workspace-side `.gdrivesync.json` manifest for bindings and sync state
+- A JSON-capable CLI for inspect, export, link, status, sync, unlink, and repair flows
+- A VS Code extension with real UI for linking and syncing
+
+## Extension overview
+
+The VS Code extension handles:
+
+- Google account connection
+- linking the current file
+- importing a new local file from Google
+- syncing the current file
+- syncing all linked files
+- optional sync-on-open
+- unlinking
+- image enrichment configuration
+
+Desktop sign-in uses a localhost callback from the extension host.
+
+## CLI overview
+
+The CLI is intended to be agent-friendly and machine-readable.
+
+Main commands:
+
+```bash
+gdrivesync auth login
+gdrivesync auth status --json
+gdrivesync inspect <google-file-url-or-id> --json
+gdrivesync export <google-file-url-or-id> [output-path] --json
+gdrivesync link <google-file-url-or-id> <local-path> --cwd ./data --json
+gdrivesync status --all --cwd ./data --json
+gdrivesync sync --all --cwd ./data --json
+gdrivesync unlink <local-path> --cwd ./data --json
+gdrivesync doctor --cwd ./data --json --repair
+```
+
+The CLI also supports optional cloud-image-enrichment auth flows and a rerunnable `configure image-enrichment` command.
+
+## Auth and hosting model
+
+This domain exists for:
+
+- public homepage
+- privacy policy
+- hosted Google Picker fallback flow
+
+The product itself is local-first:
+
+- OAuth tokens stay in local secret or auth storage
+- file bindings and sync state stay in the workspace manifest
+- generated Markdown assets and CSV outputs stay on the local machine
+- cloud image enrichment, when enabled, calls provider APIs directly from the user’s machine
+
+Desktop auth does not require the hosted picker site. Picker-based selection and some shared-link recovery flows do.
+
+## Image enrichment
+
+Markdown and Marp outputs can optionally enrich generic image alt text.
+
+Local path:
+
+- Apple Vision on macOS when available
+- Tesseract fallback when available
+
+Cloud path:
+
+- OpenAI or Anthropic
+- user-supplied credentials
+- explicit opt-in
+- no GDriveSync-hosted relay
+
+## Known limits
+
+- One-way sync only
+- Very large native Google Slides decks may fall back to a Slides API conversion path
+
+## Canonical references
+
+- Homepage: /
+- Privacy: /privacy
+- Docs HTML: /docs/
+- Docs Markdown: /docs/index.md
+- LLM index: /llms.txt

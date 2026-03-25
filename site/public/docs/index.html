@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GDriveSync Docs</title>
+    <meta
+      name="description"
+      content="Documentation for GDriveSync, the VS Code extension and CLI for pulling Google Drive files into Markdown, CSV, and extracted local assets."
+    />
+    <link rel="icon" type="image/png" href="/assets/icon.png" />
+    <link rel="stylesheet" href="/site.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <img class="brand-mark" src="/assets/icon.png" alt="GDriveSync icon" />
+          <span class="brand-copy">
+            <strong>GDriveSync</strong>
+            <span>Docs</span>
+          </span>
+        </a>
+        <nav class="topnav">
+          <a href="/">Home</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/llms.txt">llms.txt</a>
+          <a href="/llms-full.txt">LLM full text</a>
+          <a href="https://github.com/zacswolf/gdrivesync">GitHub</a>
+        </nav>
+      </header>
+
+      <section class="section-header">
+        <span class="kicker">VS Code extension + agent-first CLI</span>
+        <h1 class="page-title">Pull Google Drive files into agent-friendly local files.</h1>
+        <p class="page-lede">
+          GDriveSync turns Google Docs, Slides, Sheets, DOCX, PPTX, and XLSX into normal Markdown, Marp-flavored
+          Markdown, CSV, and extracted image assets, then keeps them in sync with a clear one-way model.
+        </p>
+      </section>
+
+      <section class="two-up section">
+        <article class="article panel">
+          <h2 id="quick-start">Quick start</h2>
+          <ol>
+            <li>Connect a Google account in the extension or with <code>gdrivesync auth login</code>.</li>
+            <li>Link or import a Google file.</li>
+            <li>Sync it into Markdown, Marp, or CSV.</li>
+            <li>Re-run sync whenever the Google file changes.</li>
+          </ol>
+
+          <div class="note">
+            GDriveSync is intentionally one-way. Google Drive stays the source of truth, and your local files stay easy
+            for humans, agents, and normal tooling to read.
+          </div>
+
+          <h2 id="outputs">What you get</h2>
+          <ul>
+            <li>Docs and DOCX -> Markdown</li>
+            <li>Slides and PowerPoint -> Marp-flavored Markdown</li>
+            <li>Sheets and XLSX -> CSV or a folder of CSVs</li>
+            <li>Each raster image asset extracted to its own local file when applicable</li>
+            <li>A workspace-side <code>.gdrivesync.json</code> manifest for bindings and sync state</li>
+          </ul>
+
+          <h2 id="extension">VS Code extension</h2>
+          <p>
+            The extension is the easiest path when you want a real sync button inside your editor. It handles Google
+            account connection, linking the current file, import flows, sync-on-open, unlinking, and image enrichment
+            configuration.
+          </p>
+          <ul>
+            <li><code>Connect Google Account...</code></li>
+            <li><code>Link Current File</code></li>
+            <li><code>Import Google File as New Local File</code></li>
+            <li><code>Sync Current File</code> and <code>Sync All Linked Files</code></li>
+            <li><code>Configure Image Enrichment...</code></li>
+          </ul>
+
+          <h2 id="cli">CLI</h2>
+          <p>
+            The CLI is built for agents and automation. It provides machine-readable <code>--json</code> envelopes,
+            explicit workspace targeting, auth management, export, link, status, sync, unlink, and repair tooling.
+          </p>
+          <pre><code>gdrivesync auth login
+gdrivesync inspect &lt;google-file-url-or-id&gt; --json
+gdrivesync export &lt;google-file-url-or-id&gt; ./deck.md --json
+gdrivesync link &lt;google-file-url-or-id&gt; ./notes/spec.md --cwd ./data --json
+gdrivesync sync --all --cwd ./data --json
+gdrivesync doctor --cwd ./data --json --repair</code></pre>
+
+          <h2 id="auth">Google auth and hosted picker</h2>
+          <p>
+            Desktop sign-in uses a localhost callback and does not need a hosted picker site. Picker-based selection
+            and some shared-link recovery flows do use the hosted site on this domain.
+          </p>
+
+          <h2 id="image-enrichment">Image enrichment</h2>
+          <p>
+            Markdown and Marp outputs can optionally enrich generic image alt text. Local OCR uses Apple Vision on
+            macOS or Tesseract when available. Cloud image enrichment uses user-supplied OpenAI or Anthropic
+            credentials directly from the user’s machine and is explicit opt-in.
+          </p>
+
+          <h2 id="troubleshooting">Troubleshooting</h2>
+          <ul>
+            <li>If a linked file has local edits, sync may pause until you confirm overwrite.</li>
+            <li>If the wrong Google account is bound, reconnect or switch the default account.</li>
+            <li>If the hosted picker is not configured, pasted-link flows can still work but picker flows may not.</li>
+            <li>If the manifest is busy, another sync or CLI command is probably updating it.</li>
+          </ul>
+
+          <h2 id="limits">Known limits</h2>
+          <ul>
+            <li>One-way sync only</li>
+            <li>Very large native Google Slides decks may fall back to the Google Slides API path</li>
+          </ul>
+        </article>
+
+        <aside class="doc-panel toc">
+          <h2>On this page</h2>
+          <ul>
+            <li><a href="#quick-start">Quick start</a></li>
+            <li><a href="#outputs">Outputs</a></li>
+            <li><a href="#extension">VS Code extension</a></li>
+            <li><a href="#cli">CLI</a></li>
+            <li><a href="#auth">Google auth</a></li>
+            <li><a href="#image-enrichment">Image enrichment</a></li>
+            <li><a href="#troubleshooting">Troubleshooting</a></li>
+            <li><a href="#limits">Known limits</a></li>
+          </ul>
+
+          <div class="mini-list">
+            <div>
+              <strong>For humans</strong>
+              <p>Use this page plus the README for setup and product context.</p>
+            </div>
+            <div>
+              <strong>For LLMs</strong>
+              <p>Fetch <a href="/llms.txt">/llms.txt</a> or <a href="/llms-full.txt">/llms-full.txt</a> for text-first context.</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <footer class="site-footer">
+        <strong>GDriveSync</strong>
+        <div class="site-footer-links">
+          <a href="/">Home</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/llms.txt">llms.txt</a>
+          <a href="https://github.com/zacswolf/gdrivesync">GitHub</a>
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>

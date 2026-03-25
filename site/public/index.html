@@ -4,143 +4,167 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GDriveSync</title>
-    <style>
-      :root {
-        color-scheme: light;
-        --ink: #18231b;
-        --muted: #5e6c60;
-        --paper: #f4f1e8;
-        --card: rgba(255, 255, 255, 0.82);
-        --accent: #23603a;
-        --accent-2: #d6efe0;
-        --edge: rgba(24, 35, 27, 0.08);
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: "Iowan Old Style", "Palatino Linotype", serif;
-        color: var(--ink);
-        background:
-          radial-gradient(circle at top, rgba(35, 96, 58, 0.18), transparent 38%),
-          linear-gradient(160deg, #f9f6ee 0%, var(--paper) 55%, #ebe6d9 100%);
-      }
-
-      main {
-        max-width: 72rem;
-        margin: 0 auto;
-        padding: 4rem 1.5rem 5rem;
-      }
-
-      .hero {
-        display: grid;
-        gap: 1.5rem;
-        padding: 2rem 0 3rem;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: clamp(2.6rem, 8vw, 5.8rem);
-        line-height: 0.96;
-        letter-spacing: -0.04em;
-        max-width: 10ch;
-      }
-
-      .lede {
-        max-width: 34rem;
-        color: var(--muted);
-        font-size: 1.15rem;
-        line-height: 1.65;
-      }
-
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-        gap: 1rem;
-      }
-
-      .card {
-        padding: 1.3rem;
-        background: var(--card);
-        border: 1px solid var(--edge);
-        border-radius: 20px;
-        backdrop-filter: blur(18px);
-        box-shadow: 0 20px 45px rgba(28, 39, 30, 0.08);
-      }
-
-      .card h2 {
-        margin-top: 0;
-        font-size: 1.25rem;
-      }
-
-      .pill {
-        display: inline-flex;
-        align-items: center;
-        padding: 0.45rem 0.8rem;
-        border-radius: 999px;
-        background: var(--accent-2);
-        color: var(--accent);
-        font-size: 0.9rem;
-        letter-spacing: 0.01em;
-      }
-
-      a {
-        color: var(--accent);
-      }
-
-      footer {
-        margin-top: 3rem;
-        color: var(--muted);
-      }
-    </style>
+    <meta
+      name="description"
+      content="GDriveSync is a VS Code extension and agent-friendly CLI for pulling Google Drive files into Markdown, CSV, and extracted local assets with elegant one-way sync."
+    />
+    <link rel="icon" type="image/png" href="/assets/icon.png" />
+    <link rel="stylesheet" href="/site.css" />
   </head>
   <body>
-    <main>
-      <span class="pill">OAuth, Picker, and privacy site</span>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <img class="brand-mark" src="/assets/icon.png" alt="GDriveSync icon" />
+          <span class="brand-copy">
+            <strong>GDriveSync</strong>
+            <span>Google Drive -> local files</span>
+          </span>
+        </a>
+        <nav class="topnav">
+          <a href="/docs/">Docs</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/llms.txt">llms.txt</a>
+          <a href="https://github.com/zacswolf/gdrivesync">GitHub</a>
+        </nav>
+      </header>
+
       <section class="hero">
-        <h1>Google files to Markdown, Marp, or CSV, with a real sync button.</h1>
-        <p class="lede">
-          GDriveSync links Google Docs and DOCX files to normal Markdown files, Google Slides and PowerPoint files to
-          Marp-flavored Markdown, and Google Sheets and XLSX files to local CSV output in VS Code and through an
-          agent-friendly CLI. Sync is one-way by design: Google Drive stays the source of truth. Multiple connected
-          Google accounts are supported for selecting, linking, and recovering access to files when needed. Markdown
-          and Marp outputs can also opt into local OCR or direct provider-based image enrichment without sending image
-          data to a hosted GDriveSync service.
-        </p>
+        <div>
+          <span class="kicker">VS Code extension + agent-friendly CLI</span>
+          <h1>Pull Google Drive documents into Markdown, CSV, and clean local assets.</h1>
+          <p class="lede">
+            GDriveSync is a Google Drive bridge for humans and agents. It turns Docs, Slides, Sheets, DOCX, PPTX, and
+            XLSX into normal local files, then keeps them in sync with a deliberate one-way model where Google Drive
+            remains the source of truth.
+          </p>
+          <div class="actions">
+            <a class="button primary" href="/docs/">Read the docs</a>
+            <a class="button secondary" href="/privacy">Privacy policy</a>
+            <a class="button secondary" href="https://github.com/zacswolf/gdrivesync">View on GitHub</a>
+          </div>
+          <div class="pill-row">
+            <span>Docs -> Markdown</span>
+            <span>Slides -> Marp</span>
+            <span>Sheets -> CSV</span>
+            <span>Each image asset as its own file</span>
+          </div>
+        </div>
+
+        <aside class="hero-visual">
+          <img src="/assets/brand.png" alt="GDriveSync brand art showing Google Drive files flowing into markdown, csv, and image outputs." />
+          <p>
+            Built for elegant one-way sync: local files stay readable and native to your workspace, while Google Drive
+            stays authoritative.
+          </p>
+        </aside>
       </section>
 
-      <section class="grid">
-        <article class="card">
-          <h2>Why this site exists</h2>
+      <section class="section">
+        <div class="section-header">
+          <h2>Built for the exact handoff agents actually need</h2>
           <p>
-            GDriveSync uses this domain for its public homepage, privacy policy, and hosted
-            Google Picker flow for supported Docs, Slides, Sheets, DOCX, PPTX, and XLSX sources.
+            Most automation wants stable local files, not opaque remote APIs. GDriveSync gives you a repeatable bridge
+            from Google Drive into Markdown, Marp-flavored Markdown, CSV, and extracted image assets that normal tools
+            can read immediately.
           </p>
-        </article>
-        <article class="card">
-          <h2>What GDriveSync stores</h2>
-          <p>
-            OAuth tokens for connected Google accounts stay in local secret or auth storage. File mappings,
-            bound-account metadata, and sync state live in a workspace-side <code>.gdrivesync.json</code> manifest,
-            while generated Markdown assets, image-enrichment cache files, and spreadsheet CSV folders stay on your
-            machine.
-          </p>
-        </article>
-        <article class="card">
-          <h2>Privacy</h2>
-          <p>
-            The extension only uses Google Drive access to read supported Google files that you explicitly link. Read
-            the full policy on the <a href="/privacy">privacy page</a>.
-          </p>
-        </article>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <h3>VS Code extension</h3>
+            <p>
+              Link the current file, sync on demand, use CodeLens and status UI, and keep Google content flowing into a
+              normal workspace without leaving your editor.
+            </p>
+          </article>
+          <article class="card">
+            <h3>CLI for agents</h3>
+            <p>
+              Inspect, export, link, status, sync, and unlink through a JSON-capable CLI designed for automation and
+              agent workflows rather than fragile browser scraping.
+            </p>
+          </article>
+          <article class="card">
+            <h3>Deliberate one-way sync</h3>
+            <p>
+              GDriveSync does not pretend to be a collaborative round-trip editor. Google Drive is the source of truth,
+              and the local side is optimized for clean consumption.
+            </p>
+          </article>
+        </div>
       </section>
 
-      <footer>
-        <p>GDriveSync</p>
+      <section class="section">
+        <div class="section-header">
+          <h2>What actually lands on disk</h2>
+          <p>
+            The output shapes are predictable, workspace-native, and easy to version or hand to another tool.
+          </p>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <h3>Google Docs and DOCX</h3>
+            <p>Normal Markdown, with extracted local images instead of giant embedded blobs.</p>
+          </article>
+          <article class="card">
+            <h3>Google Slides and PPTX</h3>
+            <p>Marp-flavored Markdown tuned for slide text, extracted assets, and practical downstream editing.</p>
+          </article>
+          <article class="card">
+            <h3>Google Sheets and XLSX</h3>
+            <p>CSV output, including a directory-of-CSVs shape when there are multiple visible sheets.</p>
+          </article>
+          <article class="card">
+            <h3>Manifest-aware sync</h3>
+            <p>
+              A local <code>.gdrivesync.json</code> manifest stores file bindings and sync state without turning your
+              workspace into a black box.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="section-header">
+          <h2>Privacy and hosting model</h2>
+          <p>
+            This domain exists for product identity, privacy policy, and the hosted Google Picker fallback flow. The
+            sync product itself is local-first.
+          </p>
+        </div>
+        <div class="grid">
+          <article class="card">
+            <h3>Local auth and state</h3>
+            <p>
+              OAuth tokens stay in local secret or auth storage. File mappings and sync metadata stay in your
+              workspace-side manifest.
+            </p>
+          </article>
+          <article class="card">
+            <h3>No hosted sync backend</h3>
+            <p>
+              GDriveSync does not proxy linked file contents through a hosted service. Optional cloud image enrichment
+              calls provider APIs directly from the user’s machine.
+            </p>
+          </article>
+          <article class="card">
+            <h3>LLM-friendly docs</h3>
+            <p>
+              Humans can use <a href="/docs/">/docs/</a>. Agents can use <a href="/llms.txt">/llms.txt</a> and
+              <a href="/llms-full.txt">/llms-full.txt</a> for text-first context.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <footer class="site-footer">
+        <strong>GDriveSync</strong>
+        <div class="site-footer-links">
+          <a href="/docs/">Docs</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/llms.txt">llms.txt</a>
+          <a href="https://github.com/zacswolf/gdrivesync">GitHub</a>
+        </div>
       </footer>
     </main>
   </body>

@@ -1,0 +1,28 @@
+# GDriveSync
+
+> GDriveSync is a VS Code extension and agent-friendly CLI for pulling Google Drive files into Markdown, CSV, Marp-flavored Markdown, and extracted local image assets with one-way sync.
+
+## Canonical URLs
+
+- Homepage: /
+- Docs: /docs/
+- Privacy: /privacy
+- Full text for LLMs: /llms-full.txt
+- Markdown docs mirror: /docs/index.md
+
+## Primary product facts
+
+- Google Drive is the source of truth
+- Outputs are local files, not hosted documents
+- Supports Google Docs, DOCX, Google Slides, PPTX, Google Sheets, and XLSX
+- Markdown and Marp outputs can optionally use local OCR or direct provider-based image enrichment
+- The hosted site is used for homepage, privacy policy, and Google Picker fallback only
+
+## Primary docs
+
+- /docs/#quick-start
+- /docs/#extension
+- /docs/#cli
+- /docs/#auth
+- /docs/#image-enrichment
+- /docs/#troubleshooting

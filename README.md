@@ -398,7 +398,6 @@ The CLI is intended to be a real integration surface for agent builders, not jus
 - Presentation sync targets Marp-flavored Markdown and focuses on slide text plus extracted images rather than full visual layout fidelity
 - Very large native Google Slides decks may bypass Drive export and use the Google Slides API fallback automatically
 - Spreadsheet sync only supports native Google Sheets and `.xlsx`
-- Spreadsheet parsing relies on the current `xlsx` package, which has open upstream advisories with no published fix yet. This is a known upstream dependency risk, not a hidden one. GDriveSync only parses files you explicitly pull from your own Google Drive, and the project tracks upstream changes here instead of pretending the risk is solved locally.
 - Cloud image enrichment is explicit and opt-in; it requires user-supplied OpenAI or Anthropic credentials
 - Apple Vision enrichment requires macOS plus local Swift compiler availability; otherwise GDriveSync falls back to Tesseract when installed
 - Linked files must live inside an open VS Code workspace folder

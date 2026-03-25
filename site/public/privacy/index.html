@@ -4,42 +4,27 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>GDriveSync Privacy Policy</title>
-    <style>
-      body {
-        margin: 0;
-        font-family: Georgia, serif;
-        color: #162018;
-        background: linear-gradient(180deg, #f8f4eb 0%, #f2ede2 100%);
-      }
-
-      main {
-        max-width: 48rem;
-        margin: 0 auto;
-        padding: 4rem 1.5rem 5rem;
-      }
-
-      article {
-        background: rgba(255, 255, 255, 0.88);
-        border: 1px solid rgba(22, 32, 24, 0.08);
-        border-radius: 24px;
-        padding: 2rem;
-        box-shadow: 0 18px 42px rgba(18, 24, 20, 0.08);
-      }
-
-      h1,
-      h2 {
-        line-height: 1.1;
-      }
-
-      p,
-      li {
-        line-height: 1.7;
-      }
-    </style>
+    <link rel="icon" type="image/png" href="/assets/icon.png" />
+    <link rel="stylesheet" href="/site.css" />
   </head>
   <body>
-    <main>
-      <article>
+    <main class="shell">
+      <header class="topbar">
+        <a class="brand" href="/">
+          <img class="brand-mark" src="/assets/icon.png" alt="GDriveSync icon" />
+          <span class="brand-copy">
+            <strong>GDriveSync</strong>
+            <span>Privacy</span>
+          </span>
+        </a>
+        <nav class="topnav">
+          <a href="/">Home</a>
+          <a href="/docs/">Docs</a>
+          <a href="https://github.com/zacswolf/gdrivesync">GitHub</a>
+        </nav>
+      </header>
+
+      <article class="article panel">
         <h1>Privacy Policy</h1>
         <p>
           GDriveSync uses Google account access only to read supported Google Drive files that you explicitly connect
@@ -75,6 +60,15 @@
         <h2>Contact</h2>
         <p>Questions about GDriveSync or this policy can be sent to the maintainer of the release.</p>
       </article>
+
+      <footer class="site-footer">
+        <strong>GDriveSync</strong>
+        <div class="site-footer-links">
+          <a href="/">Home</a>
+          <a href="/docs/">Docs</a>
+          <a href="/llms.txt">llms.txt</a>
+        </div>
+      </footer>
     </main>
   </body>
 </html>
